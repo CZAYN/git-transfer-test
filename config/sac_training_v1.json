@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "backend": "physics_v1",
+  "run_name": "sac_training_v1",
+  "description": "Server-oriented staged SAC training for the 11-D three-loop PIDF and DOBC tuner.",
+  "default_device": "cuda",
+  "seeds": [
+    20260801,
+    20260802,
+    20260803
+  ],
+  "stages": [
+    {
+      "name": "current",
+      "total_timesteps": 30000
+    },
+    {
+      "name": "speed",
+      "total_timesteps": 40000
+    },
+    {
+      "name": "position",
+      "total_timesteps": 40000
+    },
+    {
+      "name": "dobc",
+      "total_timesteps": 30000
+    },
+    {
+      "name": "joint",
+      "total_timesteps": 120000
+    }
+  ],
+  "environment": {
+    "max_episode_steps": 32,
+    "audit_interval": 64,
+    "initial_perturbation": 0.02
+  },
+  "sac": {
+    "policy": "MultiInputPolicy",
+    "learning_rate": 0.0003,
+    "buffer_size": 50000,
+    "learning_starts": 2000,
+    "batch_size": 256,
+    "tau": 0.005,
+    "gamma": 0.98,
+    "train_frequency": 1,
+    "gradient_steps": 1,
+    "network_architecture": [
+      256,
+      256
+    ]
+  },
+  "checkpoint": {
+    "interval_timesteps": 10000,
+    "save_replay_buffer": true,
+    "keep_last": 2
+  },
+  "validation": {
+    "interval_timesteps": 10000,
+    "candidate_pool_size": 64,
+    "periodic_candidate_limit": 4,
+    "stage_finalist_limit": 3,
+    "minimum_cost_improvement": 1e-06
+  },
+  "tensorboard": {
+    "enabled": true,
+    "subdirectory": "tensorboard"
+  },
+  "runtime": {
+    "minimum_free_disk_gb": 10.0,
+    "progress_bar": false,
+    "torch_deterministic_algorithms": false
+  },
+  "isolation": {
+    "training_models": 40,
+    "validation_models": 16,
+    "candidate_selection_source": "training_and_validation_only",
+    "sealed_evaluation_available_during_training": false
+  }
+}

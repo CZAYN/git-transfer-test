@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "model_id": "mentor_motor_physics_v1",
+  "description": "Single-axis FOC-decoupled servo model supplied by the mentor; all values use SI units.",
+  "sample_period_s": 0.0002,
+  "nominal_parameters": {
+    "inductance_h": 0.002707,
+    "resistance_ohm": 4.993,
+    "current_delay_s": 0.0002,
+    "friction_stiffness_nm_per_rad": 187.0,
+    "friction_damping_nm_s_per_rad": 2.42,
+    "viscous_friction_nm_s_per_rad": 0.0237,
+    "stribeck_velocity_rad_s": 0.05061,
+    "speed_measurement_delay_s": 0.0002,
+    "inertia_kg_m2": 0.00221,
+    "torque_constant_nm_per_a": 0.1633,
+    "position_measurement_delay_s": 0.0002
+  },
+  "uncertainty_fraction": {
+    "inductance_h": 0.05,
+    "resistance_ohm": 0.05,
+    "current_delay_s": 0.1,
+    "friction_stiffness_nm_per_rad": 0.1,
+    "friction_damping_nm_s_per_rad": 0.1,
+    "viscous_friction_nm_s_per_rad": 0.1,
+    "stribeck_velocity_rad_s": 0.1,
+    "speed_measurement_delay_s": 0.1,
+    "inertia_kg_m2": 0.1,
+    "torque_constant_nm_per_a": 0.05,
+    "position_measurement_delay_s": 0.1
+  },
+  "ensemble": {
+    "seed": 20260722,
+    "training_models": 40,
+    "validation_models": 16,
+    "sampling": "independent_stratified_uniform_with_nominal_model"
+  },
+  "controller_design": {
+    "current_crossover_hz": 400.0,
+    "speed_crossover_hz": 40.0,
+    "position_crossover_hz": 10.0,
+    "position_integral_ratio_at_crossover": 0.2,
+    "derivative_ratio_at_crossover": 0.05,
+    "derivative_filter_s": {
+      "current": 0.0002,
+      "speed": 0.0007957747154594767,
+      "position": 0.003183098861837907
+    },
+    "dobc": {
+      "structure": "Tload_hat=1/(Tm*s+1)*(Kt*i-(Jn*s+Bn)*omega_fb); iq_ref=iq_pid+KG/Kt*Tload_hat",
+      "gain_initial": 1.0,
+      "gain_bounds": [
+        0.0,
+        1.2
+      ],
+      "filter_time_initial_s": 0.002,
+      "filter_time_bounds_s": [
+        0.0008,
+        0.01
+      ],
+      "nominal_inverse_excludes_measurement_delay": true
+    }
+  },
+  "simulation_limits": {
+    "training_current_a": 0.5,
+    "hard_current_a": 0.7,
+    "training_torque_nm": 0.08165,
+    "hard_torque_nm": 0.11431,
+    "training_speed_rad_s": 3.4451476793248945,
+    "hard_speed_rad_s": 4.823206751054852,
+    "termination_speed_rad_s": 5.787848101265822,
+    "voltage_v": 7.2,
+    "position_hard_limit_rad": null,
+    "position_state": "unwrapped_continuous_rotation",
+    "position_error": "wrapped_to_minus_pi_pi",
+    "scope": "simulation_validity_envelope_not_confirmed_hardware_rating"
+  },
+  "encoder": {
+    "provisional_bits": 23,
+    "counts_per_revolution": 8388608,
+    "position_lsb_rad": 7.490140565847857e-7,
+    "noise_model": "uniform_half_lsb",
+    "status": "derived_simulation_requirement_not_confirmed_hardware_resolution"
+  },
+  "scenarios": {
+    "current_reference_a": 0.5,
+    "speed_reference_rad_s": 1.0,
+    "position_reference_rad": 0.002,
+    "load_torque_step_nm": 0.040825,
+    "current_duration_s": 0.02,
+    "speed_duration_s": 0.5,
+    "position_duration_s": 1.0,
+    "disturbance_duration_s": 0.5,
+    "disturbance_start_s": 0.15
+  },
+  "friction_model": {
+    "active": "viscous_B_only",
+    "stored_but_inactive": [
+      "friction_stiffness_nm_per_rad",
+      "friction_damping_nm_s_per_rad",
+      "stribeck_velocity_rad_s"
+    ],
+    "reason": "A complete LuGre law also needs Coulomb/static friction levels and an explicit sign convention; these were not supplied and are not fabricated."
+  },
+  "provenance": {
+    "inductance_correction": "User confirmed L=0.002707 H (2.707 mH).",
+    "mentor_equations": [
+      "Pcurrent(s)=1/((L*s+R)*(tcurrent*s+1))",
+      "Gmechanical(s)=Kt/(J*s+B)",
+      "Pposition(s)=1/s cascaded with the closed speed loop"
+    ],
+    "measured_frf_role": "held-out calibration and model-mismatch evidence; not the primary training plant"
+  }
+}

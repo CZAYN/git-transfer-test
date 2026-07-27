@@ -1,0 +1,41 @@
+# Python caches and build products
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
+
+# Local environments and credentials
+.venv/
+venv/
+.env
+.env.*
+
+# Editor and agent-local state
+.vscode/
+.idea/
+.agents/
+.codex/
+
+# Generated runs, logs, and release archives
+outputs/
+runs/
+logs/
+dist/
+*.zip
+
+# Local notes and archived conversations
+WSL旧会话记录/
+电机三环控制与强化学习调参_完整会话.md
+
+# Keep only the five training/validation runtime inputs used by the server.
+# Raw measurements and sealed final-test inputs stay outside the Git checkout.
+data/*
+!data/processed/
+data/processed/*
+!data/processed/controller_parameter_space_physics_v1.json
+!data/processed/frf_tasks.npz
+!data/processed/frf_tasks_manifest.json
+!data/processed/physics_motor_ensemble_v1.npz
+!data/processed/physics_motor_ensemble_v1_manifest.json

@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "model_id": "mentor_motor_physics_v1",
+  "config_path": "config/motor_physics_v1.json",
+  "config_sha256": "94d2cab39511a6badb60799cdb89b61e7937da8324dc8f1910f6f26927066671",
+  "ensemble_path": "data/processed/physics_motor_ensemble_v1.npz",
+  "model_count": 56,
+  "training_models": 40,
+  "validation_models": 16,
+  "seed": 20260722,
+  "parameter_names": [
+    "inductance_h",
+    "resistance_ohm",
+    "current_delay_s",
+    "friction_stiffness_nm_per_rad",
+    "friction_damping_nm_s_per_rad",
+    "viscous_friction_nm_s_per_rad",
+    "stribeck_velocity_rad_s",
+    "speed_measurement_delay_s",
+    "inertia_kg_m2",
+    "torque_constant_nm_per_a",
+    "position_measurement_delay_s"
+  ],
+  "uncertainty_fraction": {
+    "inductance_h": 0.05,
+    "resistance_ohm": 0.05,
+    "current_delay_s": 0.1,
+    "friction_stiffness_nm_per_rad": 0.1,
+    "friction_damping_nm_s_per_rad": 0.1,
+    "viscous_friction_nm_s_per_rad": 0.1,
+    "stribeck_velocity_rad_s": 0.1,
+    "speed_measurement_delay_s": 0.1,
+    "inertia_kg_m2": 0.1,
+    "torque_constant_nm_per_a": 0.05,
+    "position_measurement_delay_s": 0.1
+  },
+  "nominal_model_included": true,
+  "measured_frf_used_for_fitting": false,
+  "measured_frf_role": "held-out calibration and model-mismatch evidence; not the primary training plant"
+}
