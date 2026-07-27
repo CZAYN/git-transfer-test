@@ -7,6 +7,9 @@ import pytest
 from elc_rl.sac_training import (
     CandidatePool,
     CandidateRecord,
+    TrainingProgressReporter,
+    _plan_code_migration,
+    _reconcile_stage_progress,
     _save_resume_checkpoint,
     build_training_input_manifest,
     load_formal_training_config,
@@ -106,6 +109,94 @@ def test_resume_checkpoint_is_complete_and_rotated(tmp_path):
     )
     assert persisted["global_timesteps_completed"] == 30
     assert (tmp_path / persisted["latest_checkpoint"]).is_dir()
+
+
+def test_failed_checkpoint_progress_is_reconciled_from_model_timesteps():
+    config = load_formal_training_config(PROJECT_ROOT)
+    effective_steps = {
+        stage.name: stage.total_timesteps for stage in config.stages
+    }
+    state = {
+        "stage_index": 1,
+        "stage": "speed",
+        "stage_timesteps_completed": 0,
+        "global_timesteps_completed": 30395,
+    }
+
+    assert _reconcile_stage_progress(state, effective_steps, 30395)
+    assert state["stage_timesteps_completed"] == 395
+    assert state["global_timesteps_completed"] == 30395
+
+    state["stage_timesteps_completed"] = 500
+    with pytest.raises(ValueError, match="ahead of the model"):
+        _reconcile_stage_progress(state, effective_steps, 30395)
+
+
+def test_code_migration_allows_only_the_audited_source_files(tmp_path):
+    previous = {
+        "fingerprint": "old",
+        "files": [
+            {
+                "path": "src/elc_rl/controller_parameters.py",
+                "size_bytes": 10,
+                "sha256": "a" * 64,
+            }
+        ],
+    }
+    current = {
+        "fingerprint": "new",
+        "files": [
+            {
+                "path": "src/elc_rl/controller_parameters.py",
+                "size_bytes": 11,
+                "sha256": "b" * 64,
+            }
+        ],
+    }
+    (tmp_path / "run_manifest.json").write_text(
+        json.dumps({"training_inputs": previous}),
+        encoding="utf-8",
+    )
+    migration = _plan_code_migration(
+        tmp_path,
+        {"input_fingerprint": "old"},
+        current,
+        allowed=True,
+    )
+    assert migration is not None
+    assert [item["path"] for item in migration["changed_files"]] == [
+        "src/elc_rl/controller_parameters.py"
+    ]
+
+    current["files"][0]["path"] = "config/sac_training_v1.json"
+    with pytest.raises(ValueError, match="non-approved"):
+        _plan_code_migration(
+            tmp_path,
+            {"input_fingerprint": "old"},
+            current,
+            allowed=True,
+        )
+
+
+def test_progress_reporter_prints_redirect_safe_eta(capsys):
+    reporter = TrainingProgressReporter(
+        seed=20260801,
+        stage="speed",
+        stage_start_global_steps=30000,
+        stage_total_steps=40000,
+        run_total_steps=260000,
+        previous_wall_time_s=100.0,
+        session_started=0.0,
+        initial_global_steps=30395,
+    )
+    message = reporter.report(31000, force=True)
+    captured = capsys.readouterr().out
+    assert message is not None
+    assert "seed=20260801" in captured
+    assert "stage=speed" in captured
+    assert "stage_steps=1000/40000" in captured
+    assert "total_steps=31000/260000" in captured
+    assert "eta=" in captured
 
 
 def test_engineering_candidate_is_rejected_by_formal_selection(tmp_path):

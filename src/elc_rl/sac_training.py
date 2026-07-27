@@ -51,6 +51,15 @@ TRAINING_INPUT_RELATIVE_PATHS = (
     "scripts/train_sac.py",
 )
 
+AUDITED_CODE_MIGRATION_PATHS = frozenset(
+    {
+        "scripts/train_sac.py",
+        "src/elc_rl/controller_parameters.py",
+        "src/elc_rl/sac_training.py",
+    }
+)
+PROGRESS_REPORT_INTERVAL_TIMESTEPS = 1000
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -410,15 +419,83 @@ class StopController:
         self.signal_name = signal_name
 
 
+def _format_duration(seconds: float) -> str:
+    total_seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+class TrainingProgressReporter:
+    """Emit flush-safe progress and ETA lines for redirected server logs."""
+
+    def __init__(
+        self,
+        *,
+        seed: int,
+        stage: str,
+        stage_start_global_steps: int,
+        stage_total_steps: int,
+        run_total_steps: int,
+        previous_wall_time_s: float,
+        session_started: float,
+        initial_global_steps: int,
+        interval_timesteps: int = PROGRESS_REPORT_INTERVAL_TIMESTEPS,
+    ) -> None:
+        self.seed = int(seed)
+        self.stage = stage
+        self.stage_start_global_steps = int(stage_start_global_steps)
+        self.stage_total_steps = int(stage_total_steps)
+        self.run_total_steps = int(run_total_steps)
+        self.previous_wall_time_s = float(previous_wall_time_s)
+        self.session_started = float(session_started)
+        self.interval_timesteps = int(interval_timesteps)
+        if self.interval_timesteps <= 0:
+            raise ValueError("progress interval must be positive")
+        self.next_report_steps = (
+            (int(initial_global_steps) // self.interval_timesteps) + 1
+        ) * self.interval_timesteps
+
+    def report(self, global_steps: int, *, force: bool = False) -> str | None:
+        completed = int(global_steps)
+        if not force and completed < self.next_report_steps:
+            return None
+        while self.next_report_steps <= completed:
+            self.next_report_steps += self.interval_timesteps
+
+        elapsed = (
+            self.previous_wall_time_s + time.perf_counter() - self.session_started
+        )
+        rate = completed / elapsed if elapsed > 0.0 else 0.0
+        remaining_steps = max(0, self.run_total_steps - completed)
+        eta = remaining_steps / rate if rate > 0.0 else float("inf")
+        stage_completed = min(
+            self.stage_total_steps,
+            max(0, completed - self.stage_start_global_steps),
+        )
+        eta_text = _format_duration(eta) if np.isfinite(eta) else "unknown"
+        message = (
+            f"[progress] seed={self.seed} stage={self.stage} "
+            f"stage_steps={stage_completed}/{self.stage_total_steps} "
+            f"total_steps={completed}/{self.run_total_steps} "
+            f"rate={rate:.2f} steps/s elapsed={_format_duration(elapsed)} "
+            f"eta={eta_text}"
+        )
+        print(message, flush=True)
+        return message
+
+
 class CandidateCollectorCallback(BaseCallback):
     def __init__(
         self,
         pool: CandidatePool,
         stop_controller: StopController,
+        progress_reporter: TrainingProgressReporter | None = None,
     ) -> None:
         super().__init__(verbose=0)
         self.pool = pool
         self.stop_controller = stop_controller
+        self.progress_reporter = progress_reporter
 
     def _on_step(self) -> bool:
         for info in self.locals.get("infos", []):
@@ -432,6 +509,8 @@ class CandidateCollectorCallback(BaseCallback):
                     global_timestep=int(self.model.num_timesteps),
                 )
             )
+        if self.progress_reporter is not None:
+            self.progress_reporter.report(int(self.model.num_timesteps))
         return not self.stop_controller.requested
 
 
@@ -868,6 +947,132 @@ def _effective_stage_steps(
     }
 
 
+def _manifest_files_by_path(
+    manifest: Mapping[str, Any],
+) -> dict[str, Mapping[str, Any]]:
+    files = manifest.get("files")
+    if not isinstance(files, list):
+        raise ValueError("training input manifest has no file list")
+    by_path: dict[str, Mapping[str, Any]] = {}
+    for item in files:
+        if not isinstance(item, Mapping) or "path" not in item:
+            raise ValueError("training input manifest contains an invalid file entry")
+        path = str(item["path"])
+        if path in by_path:
+            raise ValueError(f"training input manifest repeats path: {path}")
+        by_path[path] = item
+    return by_path
+
+
+def _plan_code_migration(
+    run_dir: Path,
+    state: Mapping[str, Any],
+    current_manifest: Mapping[str, Any],
+    *,
+    allowed: bool,
+) -> dict[str, Any] | None:
+    previous_fingerprint = str(state.get("input_fingerprint", ""))
+    current_fingerprint = str(current_manifest.get("fingerprint", ""))
+    if previous_fingerprint == current_fingerprint:
+        return None
+    if not allowed:
+        raise ValueError(
+            "resume input fingerprint changed; rerun with --allow-code-migration "
+            "only for an audited source-code hotfix"
+        )
+
+    run_manifest_path = Path(run_dir) / "run_manifest.json"
+    if not run_manifest_path.is_file():
+        raise FileNotFoundError(
+            f"cannot audit code migration without {run_manifest_path}"
+        )
+    run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+    previous_manifest = run_manifest.get("training_inputs")
+    if not isinstance(previous_manifest, Mapping):
+        raise ValueError("run manifest has no original training input manifest")
+    if previous_manifest.get("fingerprint") != previous_fingerprint:
+        raise ValueError(
+            "trainer state and original run manifest input fingerprints disagree"
+        )
+
+    previous_files = _manifest_files_by_path(previous_manifest)
+    current_files = _manifest_files_by_path(current_manifest)
+    changed_paths = sorted(
+        path
+        for path in set(previous_files) | set(current_files)
+        if previous_files.get(path) != current_files.get(path)
+    )
+    disallowed = sorted(set(changed_paths) - AUDITED_CODE_MIGRATION_PATHS)
+    if not changed_paths or disallowed:
+        raise ValueError(
+            "code migration changed non-approved training inputs: "
+            f"{disallowed or changed_paths}"
+        )
+    changes = [
+        {
+            "path": path,
+            "previous": previous_files.get(path),
+            "current": current_files.get(path),
+        }
+        for path in changed_paths
+    ]
+    return {
+        "schema_version": 1,
+        "kind": "audited_boundary_and_resume_hotfix",
+        "migrated_at_utc": utc_now(),
+        "previous_fingerprint": previous_fingerprint,
+        "current_fingerprint": current_fingerprint,
+        "changed_files": changes,
+    }
+
+
+def _reconcile_stage_progress(
+    state: dict[str, Any],
+    effective_steps: Mapping[str, int],
+    global_steps: int,
+) -> bool:
+    stage_index = int(state["stage_index"])
+    if not 0 <= stage_index <= len(STAGE_ORDER):
+        raise ValueError("cannot reconcile an invalid stage index")
+    prior_steps = sum(
+        int(effective_steps[stage]) for stage in STAGE_ORDER[:stage_index]
+    )
+    completed_global = int(global_steps)
+    if stage_index == len(STAGE_ORDER):
+        expected_total = prior_steps
+        if completed_global != expected_total:
+            raise ValueError(
+                "post-stage global timestep mismatch: "
+                f"model={completed_global}, expected={expected_total}"
+            )
+        state["global_timesteps_completed"] = completed_global
+        return False
+
+    stage_total = int(effective_steps[STAGE_ORDER[stage_index]])
+    inferred_stage_steps = completed_global - prior_steps
+    if not 0 <= inferred_stage_steps <= stage_total:
+        raise ValueError(
+            "model timesteps cannot be assigned to the active stage: "
+            f"stage={STAGE_ORDER[stage_index]}, inferred={inferred_stage_steps}, "
+            f"budget={stage_total}"
+        )
+    recorded_stage_steps = int(state["stage_timesteps_completed"])
+    if recorded_stage_steps > inferred_stage_steps:
+        raise ValueError(
+            "trainer state is ahead of the model checkpoint: "
+            f"state={recorded_stage_steps}, model={inferred_stage_steps}"
+        )
+    changed = (
+        recorded_stage_steps != inferred_stage_steps
+        or int(state["global_timesteps_completed"]) != completed_global
+    )
+    state["stage_timesteps_completed"] = inferred_stage_steps
+    state["global_timesteps_completed"] = completed_global
+    if changed:
+        state["updated_at_utc"] = utc_now()
+    return changed
+
+
 def _initial_state(
     config: FormalTrainingConfig,
     input_manifest: Mapping[str, Any],
@@ -912,12 +1117,12 @@ def _verify_resume_state(
     seed: int,
     run_kind: str,
     effective_steps: Mapping[str, int],
+    code_migration: Mapping[str, Any] | None = None,
 ) -> None:
     expected = {
         "backend": "physics_v1",
         "seed": int(seed),
         "config_sha256": config.sha256,
-        "input_fingerprint": input_manifest["fingerprint"],
         "run_kind": run_kind,
         "effective_stage_timesteps": dict(effective_steps),
     }
@@ -928,6 +1133,13 @@ def _verify_resume_state(
     }
     if mismatches:
         raise ValueError(f"resume state is incompatible: {mismatches}")
+    fingerprint_changed = (
+        state.get("input_fingerprint") != input_manifest["fingerprint"]
+    )
+    if fingerprint_changed and code_migration is None:
+        raise ValueError("resume input fingerprint changed without an audited migration")
+    if not fingerprint_changed and code_migration is not None:
+        raise ValueError("unexpected code migration for identical input fingerprints")
     if state.get("status") == "completed":
         return
     stage_index = int(state["stage_index"])
@@ -971,6 +1183,7 @@ def run_formal_training(
     run_dir: Path,
     device: str | None = None,
     resume: bool = False,
+    allow_code_migration: bool = False,
     engineering_steps_per_stage: int | None = None,
     stop_controller: StopController | None = None,
 ) -> dict[str, Any]:
@@ -997,12 +1210,19 @@ def run_formal_training(
     evaluator = get_physics_controller_evaluator(root)
     initial_parameters = evaluator.space.initial.copy()
     controller = stop_controller if stop_controller is not None else StopController()
+    code_migration: dict[str, Any] | None = None
 
     if resume:
         state_path = output / "trainer_state.json"
         if not state_path.is_file():
             raise FileNotFoundError(f"missing resume state: {state_path}")
         state = json.loads(state_path.read_text(encoding="utf-8"))
+        code_migration = _plan_code_migration(
+            output,
+            state,
+            input_manifest,
+            allowed=allow_code_migration,
+        )
         _verify_resume_state(
             state,
             config,
@@ -1010,6 +1230,7 @@ def run_formal_training(
             seed,
             run_kind,
             effective_steps,
+            code_migration,
         )
         if state["status"] == "completed":
             summary_path = output / "seed_summary.json"
@@ -1074,6 +1295,7 @@ def run_formal_training(
     environment: PIDTuningEnv | None = None
     session_started = time.perf_counter()
     previous_wall_time = float(state.get("accumulated_wall_time_s", 0.0))
+    run_total_steps = sum(int(effective_steps[stage]) for stage in STAGE_ORDER)
 
     try:
         while int(state["stage_index"]) < len(STAGE_ORDER):
@@ -1107,6 +1329,39 @@ def run_formal_training(
                             config.payload["checkpoint"]["save_replay_buffer"]
                         ),
                     )
+                    progress_reconciled = _reconcile_stage_progress(
+                        state,
+                        effective_steps,
+                        int(model.num_timesteps),
+                    )
+                    if code_migration is not None:
+                        state["input_fingerprint"] = input_manifest["fingerprint"]
+                        state.setdefault("code_migrations", []).append(code_migration)
+                    if progress_reconciled or code_migration is not None:
+                        _save_resume_checkpoint(model, output, state, config)
+                        if code_migration is not None:
+                            run_manifest_path = output / "run_manifest.json"
+                            run_manifest = json.loads(
+                                run_manifest_path.read_text(encoding="utf-8")
+                            )
+                            run_manifest["training_inputs"] = input_manifest
+                            run_manifest.setdefault("code_migrations", []).append(
+                                code_migration
+                            )
+                            _atomic_write_json(run_manifest_path, run_manifest)
+                            print(
+                                "[resume] audited code migration accepted for "
+                                f"{len(code_migration['changed_files'])} files",
+                                flush=True,
+                            )
+                            code_migration = None
+                        if progress_reconciled:
+                            print(
+                                "[resume] reconciled checkpoint progress to "
+                                f"stage_steps={state['stage_timesteps_completed']} "
+                                f"global_steps={state['global_timesteps_completed']}",
+                                flush=True,
+                            )
                     resume = False
                 else:
                     model = _new_model(
@@ -1131,6 +1386,20 @@ def run_formal_training(
                 ),
             )
             completed = int(state["stage_timesteps_completed"])
+            stage_start_global_steps = sum(
+                int(effective_steps[name]) for name in STAGE_ORDER[:stage_index]
+            )
+            progress_reporter = TrainingProgressReporter(
+                seed=seed,
+                stage=stage,
+                stage_start_global_steps=stage_start_global_steps,
+                stage_total_steps=total_stage_steps,
+                run_total_steps=run_total_steps,
+                previous_wall_time_s=previous_wall_time,
+                session_started=session_started,
+                initial_global_steps=int(model.num_timesteps),
+            )
+            progress_reporter.report(int(model.num_timesteps), force=True)
             next_checkpoint = (
                 (completed // checkpoint_interval) + 1
             ) * checkpoint_interval
@@ -1145,7 +1414,11 @@ def run_formal_training(
                     next_validation,
                 )
                 requested_steps = event_step - completed
-                callback = CandidateCollectorCallback(pool, controller)
+                callback = CandidateCollectorCallback(
+                    pool,
+                    controller,
+                    progress_reporter,
+                )
                 before = int(model.num_timesteps)
                 model.learn(
                     total_timesteps=requested_steps,
@@ -1406,8 +1679,12 @@ def run_formal_training(
         }
         state["updated_at_utc"] = utc_now()
         if model is not None and int(state["stage_index"]) < len(STAGE_ORDER):
-            state["global_timesteps_completed"] = int(model.num_timesteps)
             try:
+                _reconcile_stage_progress(
+                    state,
+                    effective_steps,
+                    int(model.num_timesteps),
+                )
                 _save_resume_checkpoint(model, output, state, config)
             except BaseException as checkpoint_error:
                 state["failure"]["checkpoint_error"] = str(checkpoint_error)

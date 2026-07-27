@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from elc_rl.controller_parameters import (
     PARAMETER_ORDER,
@@ -62,6 +63,42 @@ def test_normalized_mapping_round_trip_and_bounded_action():
     updated = space.apply_action(space.initial, np.ones(11))
     assert np.all(updated >= space.lower)
     assert np.all(updated <= space.upper)
+
+
+def test_roundoff_sized_boundary_excursions_are_clipped_safely():
+    space = _space()
+    just_above_upper = np.nextafter(space.upper, np.inf)
+    just_below_lower = np.nextafter(space.lower, -np.inf)
+
+    upper_normalized = space.normalize(just_above_upper)
+    lower_normalized = space.normalize(just_below_lower)
+
+    assert np.all(upper_normalized == 1.0)
+    assert np.all(lower_normalized == -1.0)
+    assert np.all(space.denormalize(upper_normalized) <= space.upper)
+    assert np.all(space.denormalize(lower_normalized) >= space.lower)
+
+
+def test_repeated_actions_at_parameter_limits_remain_valid():
+    space = _space()
+    parameters = space.upper.copy()
+    for _ in range(100):
+        parameters = space.apply_action(parameters, np.ones(len(space.specs)))
+    assert np.all(parameters == space.upper)
+
+
+def test_material_boundary_violations_and_nonfinite_values_are_rejected():
+    space = _space()
+    invalid = space.upper.copy()
+    kispeed_index = space.names.index("kispeed")
+    invalid[kispeed_index] += max(1e-8, abs(space.upper[kispeed_index]) * 1e-8)
+    with pytest.raises(ValueError, match="kispeed"):
+        space.normalize(invalid)
+
+    nonfinite = space.initial.copy()
+    nonfinite[kispeed_index] = np.nan
+    with pytest.raises(ValueError, match="finite"):
+        space.normalize(nonfinite)
 
 
 def test_all_eleven_parameters_remain_simulation_only():

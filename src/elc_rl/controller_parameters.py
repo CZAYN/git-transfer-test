@@ -30,6 +30,12 @@ PARAMETER_ORDER = (
 
 PHYSICS_PARAMETER_SPACE_JSON = "controller_parameter_space_physics_v1.json"
 PHYSICS_PARAMETER_SPACE_NPZ = "controller_parameter_space_physics_v1.npz"
+_BOUNDARY_EPS_FACTOR = 128.0
+
+
+def _physical_boundary_tolerance(lower: float, upper: float) -> float:
+    scale = max(1.0, abs(lower), abs(upper), abs(upper - lower))
+    return _BOUNDARY_EPS_FACTOR * np.finfo(np.float64).eps * scale
 
 
 @dataclass(frozen=True)
@@ -117,18 +123,24 @@ class ControllerParameterSpace:
         values = np.asarray(physical, dtype=np.float64)
         if values.shape[-1:] != (len(self.specs),):
             raise ValueError(f"expected final dimension {len(self.specs)}, got {values.shape}")
+        if not np.isfinite(values).all():
+            raise ValueError("physical values must be finite")
         normalized = np.empty_like(values, dtype=np.float64)
         for index, spec in enumerate(self.specs):
             value = values[..., index]
-            if np.any((value < spec.lower) | (value > spec.upper)):
+            tolerance = _physical_boundary_tolerance(spec.lower, spec.upper)
+            if np.any(
+                (value < spec.lower - tolerance) | (value > spec.upper + tolerance)
+            ):
                 raise ValueError(f"physical value outside bounds: {spec.name}")
+            value = np.clip(value, spec.lower, spec.upper)
             if spec.transform == "log":
                 fraction = (np.log(value) - np.log(spec.lower)) / (
                     np.log(spec.upper) - np.log(spec.lower)
                 )
             else:
                 fraction = (value - spec.lower) / (spec.upper - spec.lower)
-            normalized[..., index] = 2.0 * fraction - 1.0
+            normalized[..., index] = np.clip(2.0 * fraction - 1.0, -1.0, 1.0)
         return normalized
 
     def denormalize(self, normalized: np.ndarray) -> np.ndarray:
@@ -137,21 +149,30 @@ class ControllerParameterSpace:
         values = np.asarray(normalized, dtype=np.float64)
         if values.shape[-1:] != (len(self.specs),):
             raise ValueError(f"expected final dimension {len(self.specs)}, got {values.shape}")
-        if np.any((values < -1.0) | (values > 1.0)):
+        if not np.isfinite(values).all():
+            raise ValueError("normalized values must be finite")
+        tolerance = _BOUNDARY_EPS_FACTOR * np.finfo(np.float64).eps
+        if np.any((values < -1.0 - tolerance) | (values > 1.0 + tolerance)):
             raise ValueError("normalized values must stay inside [-1, 1]")
+        values = np.clip(values, -1.0, 1.0)
         physical = np.empty_like(values, dtype=np.float64)
         for index, spec in enumerate(self.specs):
             fraction = (values[..., index] + 1.0) / 2.0
             if spec.transform == "log":
-                physical[..., index] = np.exp(
+                transformed = np.exp(
                     np.log(spec.lower)
                     + fraction * (np.log(spec.upper) - np.log(spec.lower))
                 )
             else:
-                physical[..., index] = spec.lower + fraction * (
+                transformed = spec.lower + fraction * (
                     spec.upper - spec.lower
                 )
-        return physical
+            physical[..., index] = np.where(
+                fraction <= 0.0,
+                spec.lower,
+                np.where(fraction >= 1.0, spec.upper, transformed),
+            )
+        return np.clip(physical, self.lower, self.upper)
 
     def apply_action(self, physical: np.ndarray, action: np.ndarray) -> np.ndarray:
         """Apply a bounded normalized delta action to one physical parameter vector."""
@@ -160,6 +181,8 @@ class ControllerParameterSpace:
         delta = np.asarray(action, dtype=np.float64)
         if delta.shape != (len(self.specs),):
             raise ValueError(f"expected action shape {(len(self.specs),)}, got {delta.shape}")
+        if not np.isfinite(delta).all():
+            raise ValueError("action values must be finite")
         if np.any((delta < -1.0) | (delta > 1.0)):
             raise ValueError("action values must stay inside [-1, 1]")
         updated = np.clip(current + delta * self.action_step_fraction, -1.0, 1.0)
@@ -490,5 +513,3 @@ def load_physics_controller_parameter_space(
     space = _space_from_payload(payload)
     space.validate()
     return space
-
-

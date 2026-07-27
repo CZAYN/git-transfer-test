@@ -48,6 +48,14 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument(
+        "--allow-code-migration",
+        action="store_true",
+        help=(
+            "with --resume, permit only the audited boundary/resume hotfix source "
+            "files to differ; configuration and data changes remain forbidden"
+        ),
+    )
+    parser.add_argument(
         "--engineering-check-steps-per-stage",
         type=int,
         default=None,
@@ -57,6 +65,8 @@ def main() -> int:
         ),
     )
     arguments = parser.parse_args()
+    if arguments.allow_code_migration and not arguments.resume:
+        parser.error("--allow-code-migration requires --resume")
 
     project_root = arguments.project_root.resolve()
     config = load_formal_training_config(project_root, arguments.config)
@@ -75,6 +85,7 @@ def main() -> int:
         run_dir=output_dir,
         device=arguments.device,
         resume=arguments.resume,
+        allow_code_migration=arguments.allow_code_migration,
         engineering_steps_per_stage=(
             arguments.engineering_check_steps_per_stage
         ),
