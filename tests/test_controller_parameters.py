@@ -21,7 +21,7 @@ def _space():
 def test_physics_parameter_order_and_initials_are_model_derived():
     space = _space()
     assert space.names == PARAMETER_ORDER
-    assert space.metadata["profile"] == "physics_v1"
+    assert space.metadata["profile"] == "physics"
     assert np.allclose(
         space.initial,
         derive_physics_controller_initials(PROJECT_ROOT),

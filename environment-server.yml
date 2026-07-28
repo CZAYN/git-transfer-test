@@ -8,6 +8,7 @@ dependencies:
   - pip
   - pytorch::pytorch=2.5.1=*cuda*
   - pytorch::pytorch-cuda=12.1
+  - numba=0.66.0
   - numpy=2.4
   - scipy=1.17
   - cloudpickle>=3.0,<4

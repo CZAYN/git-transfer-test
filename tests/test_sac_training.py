@@ -1,14 +1,19 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+import cloudpickle
 import numpy as np
 import pytest
 
 from elc_rl.sac_training import (
+    CandidateCollectorCallback,
     CandidatePool,
     CandidateRecord,
+    StopController,
     TrainingProgressReporter,
-    _plan_code_migration,
+    _effective_sac_parameters,
+    _load_checkpoint,
     _reconcile_stage_progress,
     _save_resume_checkpoint,
     build_training_input_manifest,
@@ -40,7 +45,7 @@ def test_training_input_manifest_is_deterministic_and_training_only():
     assert first == second
     assert len(first["fingerprint"]) == 64
     names = {item["path"] for item in first["files"]}
-    assert "data/processed/physics_motor_ensemble_v1.npz" in names
+    assert "data/processed/physics_motor_ensemble.npz" in names
     assert "scripts/train_sac.py" in names
     assert not any("physics_motor_test" in name for name in names)
     assert not any("final_test" in name for name in names)
@@ -62,15 +67,28 @@ def test_candidate_pool_deduplicates_and_keeps_the_lowest_costs():
     assert pool.records[0].global_timestep == 4
 
 
+class _FakeVecEnv:
+    num_envs = 2
+
+    def env_method(self, method_name: str):
+        assert method_name == "export_state"
+        return [{"worker_rank": 0}, {"worker_rank": 1}]
+
+
 class _FakeSAC:
-    def __init__(self, timesteps: int) -> None:
+    def __init__(self, timesteps: int, environment=None) -> None:
         self.num_timesteps = timesteps
+        self.environment = environment
+        self.n_envs = 1 if environment is None else environment.num_envs
 
     def save(self, path: Path) -> None:
         Path(path).write_bytes(b"model")
 
     def save_replay_buffer(self, path: Path) -> None:
         Path(path).write_bytes(b"replay")
+
+    def get_env(self):
+        return self.environment
 
 
 def test_resume_checkpoint_is_complete_and_rotated(tmp_path):
@@ -111,6 +129,133 @@ def test_resume_checkpoint_is_complete_and_rotated(tmp_path):
     assert (tmp_path / persisted["latest_checkpoint"]).is_dir()
 
 
+def test_resume_checkpoint_contains_every_vector_environment_state(tmp_path):
+    config = load_formal_training_config(PROJECT_ROOT)
+    state = {
+        "stage_index": 0,
+        "stage": "current",
+        "stage_timesteps_completed": 8,
+        "global_timesteps_completed": 8,
+        "config_sha256": config.sha256,
+        "input_fingerprint": "b" * 64,
+        "latest_checkpoint": None,
+    }
+    checkpoint = _save_resume_checkpoint(
+        _FakeSAC(8, _FakeVecEnv()),
+        tmp_path,
+        state,
+        config,
+    )
+    metadata = json.loads(
+        (checkpoint / "checkpoint.json").read_text(encoding="utf-8")
+    )
+    with (checkpoint / "environment_states.pkl").open("rb") as stream:
+        environment_states = cloudpickle.load(stream)
+    assert metadata["n_envs"] == 2
+    assert metadata["environment_state_saved"]
+    assert [item["worker_rank"] for item in environment_states] == [0, 1]
+
+
+class _ResumeVecEnv:
+    num_envs = 2
+
+    def __init__(self) -> None:
+        self.restored: list[tuple[int, dict[str, object]]] = []
+
+    def env_method(
+        self,
+        method_name: str,
+        state: dict[str, object],
+        *,
+        indices: int,
+    ):
+        assert method_name == "restore_state"
+        self.restored.append((indices, state))
+
+
+def test_resume_at_stage_boundary_starts_fresh_environment(
+    tmp_path, monkeypatch
+):
+    checkpoint = tmp_path / "checkpoints" / "current_complete"
+    checkpoint.mkdir(parents=True)
+    (checkpoint / "COMPLETE").write_text("complete\n", encoding="utf-8")
+    (checkpoint / "checkpoint.json").write_text(
+        json.dumps(
+            {
+                "stage": "current",
+                "stage_index": 0,
+                "stage_timesteps_completed": 80,
+                "global_timesteps_completed": 80,
+                "n_envs": 2,
+                "environment_state_saved": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = {
+        "latest_checkpoint": "checkpoints/current_complete",
+        "stage": "speed",
+        "stage_index": 1,
+        "stage_timesteps_completed": 0,
+        "global_timesteps_completed": 80,
+    }
+    load_arguments = {}
+    loaded_model = SimpleNamespace(num_timesteps=80)
+
+    def fake_load(*_args, **kwargs):
+        load_arguments.update(kwargs)
+        return loaded_model
+
+    monkeypatch.setattr(
+        "elc_rl.sac_training.SAC",
+        SimpleNamespace(load=fake_load),
+    )
+    monkeypatch.setattr(
+        "elc_rl.sac_training._restore_rng_state",
+        lambda _path: None,
+    )
+    environment = _ResumeVecEnv()
+    result = _load_checkpoint(
+        tmp_path,
+        state,
+        environment,
+        "cpu",
+        None,
+        expect_replay_buffer=False,
+    )
+    assert result is loaded_model
+    assert load_arguments["force_reset"]
+    assert environment.restored == []
+
+
+def test_parallel_sampling_preserves_gradient_updates_per_transition():
+    config = load_formal_training_config(PROJECT_ROOT)
+    single = _effective_sac_parameters(config, "formal_training", 1)
+    parallel = _effective_sac_parameters(config, "formal_training", 4)
+    assert single["gradient_steps"] == 1
+    assert parallel["gradient_steps"] == 4
+    assert "gradient_steps_per_transition" not in parallel
+
+
+def test_candidate_callback_assigns_distinct_vector_transition_timesteps():
+    pool = CandidatePool("joint", maximum_size=8)
+    callback = CandidateCollectorCallback(pool, StopController())
+    callback.model = SimpleNamespace(num_timesteps=104)
+    callback.locals = {
+        "infos": [
+            {
+                "fast_safe": True,
+                "stage_cost": float(cost),
+                "parameters": np.full(11, cost, dtype=np.float64),
+            }
+            for cost in (1, 2, 3, 4)
+        ]
+    }
+    assert callback._on_step()
+    by_cost = {record.fast_cost: record.global_timestep for record in pool.records}
+    assert by_cost == {1.0: 101, 2.0: 102, 3.0: 103, 4.0: 104}
+
+
 def test_failed_checkpoint_progress_is_reconciled_from_model_timesteps():
     config = load_formal_training_config(PROJECT_ROOT)
     effective_steps = {
@@ -130,52 +275,6 @@ def test_failed_checkpoint_progress_is_reconciled_from_model_timesteps():
     state["stage_timesteps_completed"] = 500
     with pytest.raises(ValueError, match="ahead of the model"):
         _reconcile_stage_progress(state, effective_steps, 30395)
-
-
-def test_code_migration_allows_only_the_audited_source_files(tmp_path):
-    previous = {
-        "fingerprint": "old",
-        "files": [
-            {
-                "path": "src/elc_rl/controller_parameters.py",
-                "size_bytes": 10,
-                "sha256": "a" * 64,
-            }
-        ],
-    }
-    current = {
-        "fingerprint": "new",
-        "files": [
-            {
-                "path": "src/elc_rl/controller_parameters.py",
-                "size_bytes": 11,
-                "sha256": "b" * 64,
-            }
-        ],
-    }
-    (tmp_path / "run_manifest.json").write_text(
-        json.dumps({"training_inputs": previous}),
-        encoding="utf-8",
-    )
-    migration = _plan_code_migration(
-        tmp_path,
-        {"input_fingerprint": "old"},
-        current,
-        allowed=True,
-    )
-    assert migration is not None
-    assert [item["path"] for item in migration["changed_files"]] == [
-        "src/elc_rl/controller_parameters.py"
-    ]
-
-    current["files"][0]["path"] = "config/sac_training_v1.json"
-    with pytest.raises(ValueError, match="non-approved"):
-        _plan_code_migration(
-            tmp_path,
-            {"input_fingerprint": "old"},
-            current,
-            allowed=True,
-        )
 
 
 def test_progress_reporter_prints_redirect_safe_eta(capsys):

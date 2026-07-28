@@ -1,4 +1,4 @@
-"""One-way final evaluation over the sealed physics-v1 test ensemble.
+"""One-way final evaluation over the sealed physics test ensemble.
 
 Nothing in this module is imported by the training environment.  The CLI
 wrapper enforces candidate locking and write-once report generation.
@@ -313,7 +313,7 @@ def evaluate_locked_final_candidate(
     return {
         "schema_version": 1,
         "test_suite_id": spec["test_suite_id"],
-        "backend": "physics_v1",
+        "backend": "physics",
         "parameter_names": list(space.names),
         "parameters": values.tolist(),
         "overall_pass": overall_pass,

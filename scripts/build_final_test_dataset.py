@@ -14,7 +14,7 @@ from elc_rl.physics_test_dataset import build_physics_test_ensemble  # noqa: E40
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Build and seal the candidate-free physics-v1 final-test set."
+        description="Build and seal the candidate-free physics final-test set."
     )
     parser.add_argument(
         "--overwrite-unconsumed",

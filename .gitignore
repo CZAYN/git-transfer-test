@@ -34,8 +34,8 @@ WSL旧会话记录/
 data/*
 !data/processed/
 data/processed/*
-!data/processed/controller_parameter_space_physics_v1.json
+!data/processed/controller_parameter_space.json
 !data/processed/frf_tasks.npz
 !data/processed/frf_tasks_manifest.json
-!data/processed/physics_motor_ensemble_v1.npz
-!data/processed/physics_motor_ensemble_v1_manifest.json
+!data/processed/physics_motor_ensemble.npz
+!data/processed/physics_motor_ensemble_manifest.json

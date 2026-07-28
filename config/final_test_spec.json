@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "test_suite_id": "physics_motor_final_test_v1",
-  "description": "Sealed, test-only generalization suite for the physics_v1 three-loop PIDF and DOBC tuner.",
+  "test_suite_id": "physics_motor_final_test",
+  "description": "Sealed, test-only generalization suite for the physics three-loop PIDF and DOBC tuner.",
   "isolation_policy": {
     "allowed_consumers": [
       "scripts/run_final_test.py",
@@ -19,8 +19,8 @@
     "final_report_write_once": true
   },
   "frozen_source": {
-    "physics_config": "config/motor_physics_v1.json",
-    "training_validation_ensemble": "data/processed/physics_motor_ensemble_v1.npz",
+    "physics_config": "config/motor_physics.json",
+    "training_validation_ensemble": "data/processed/physics_motor_ensemble.npz",
     "training_models": 40,
     "validation_models": 16,
     "training_validation_seed": 20260722
@@ -29,7 +29,7 @@
     "model_count": 16,
     "seed": 20260723,
     "sampling": "independent_stratified_uniform",
-    "uncertainty": "inherit_exactly_from_config/motor_physics_v1.json",
+    "uncertainty": "inherit_exactly_from_config/motor_physics.json",
     "nominal_model_included": false,
     "minimum_normalized_chebyshev_distance_from_train_validation": 0.02
   },
@@ -168,9 +168,9 @@
     "ood_performance_policy": "report degradation score; stability, margins, hierarchy and hard limits remain mandatory"
   },
   "output_policy": {
-    "test_ensemble": "data/processed/physics_motor_test_v1.npz",
-    "test_manifest": "data/processed/physics_motor_test_v1_manifest.json",
-    "final_report": "outputs/final_test_v1/final_test_report.json",
-    "consumption_marker": "outputs/final_test_v1/FINAL_TEST_CONSUMED.json"
+    "test_ensemble": "data/processed/physics_motor_test.npz",
+    "test_manifest": "data/processed/physics_motor_test_manifest.json",
+    "final_report": "outputs/final_test/final_test_report.json",
+    "consumption_marker": "outputs/final_test/FINAL_TEST_CONSUMED.json"
   }
 }

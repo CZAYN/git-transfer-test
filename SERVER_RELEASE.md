@@ -1,90 +1,98 @@
 # CGS 转台单次上传服务器流程
 
-本发布包只需要上传一次。它包含两个相互分离的内部 ZIP：
+发布包只需上传一次，内部包含两个相互隔离的 ZIP：
 
-- `training/elc_rl_server_training_v1.zip`：正式训练、验证和候选选择。
-- `final_test/elc_rl_server_final_test_v1.zip`：封存最终测试；候选冻结前不得解压。
+- `training/elc_rl_server_training.zip`：正式训练、验证和候选选择。
+- `final_test/elc_rl_server_final_test.zip`：封存最终测试；唯一候选冻结前不得解压或使用。
 
-## 1. 解压发布包和训练包
+## 1. 解压训练包
 
 ```bash
-unzip elc_rl_server_release_v1.zip -d elc_rl_server_release_v1
-cd elc_rl_server_release_v1
+unzip elc_rl_server_release.zip -d elc_rl_server_release
+cd elc_rl_server_release
 mkdir -p runtime/training
-unzip training/elc_rl_server_training_v1.zip -d runtime/training
+unzip training/elc_rl_server_training.zip -d runtime/training
 cd runtime/training
 ```
 
-激活已建立的服务器环境：
+更新或建立服务器环境。当前版本新增 Numba，旧环境不能只更新源码：
 
 ```bash
 unset PYTHONPATH
 source /data/l50063953/miniconda3/etc/profile.d/conda.sh
+conda env update -n elc-rl-server -f environment-server.yml
 conda activate elc-rl-server
 python -m pip install --no-deps --no-build-isolation -e .
+python -c "import numba; print(numba.__version__)"
 ```
 
-## 2. 预检和正式训练
+## 2. 预检与工程检查
 
 ```bash
 python scripts/check_server_runtime.py --device cuda
-```
+python scripts/benchmark_parallel_env.py --n-envs 4 --steps-per-env 64
 
-先运行工程检查：
-
-```bash
 python scripts/train_sac.py \
   --seed 20260801 \
   --device cuda \
-  --engineering-check-steps-per-stage 2 \
+  --n-envs 4 \
+  --engineering-check-steps-per-stage 4 \
   --output-dir outputs/formal_engineering_check
 ```
 
-工程检查通过后，在单 GPU 上顺序运行三个正式种子：
+工程检查结果不能参与正式候选选择。
+
+## 3. 启动正式训练
+
+默认同时启动 3 个种子，每个种子使用 4 个并行环境：
 
 ```bash
-python scripts/train_sac.py --seed 20260801 --device cuda
-python scripts/train_sac.py --seed 20260802 --device cuda
-python scripts/train_sac.py --seed 20260803 --device cuda
+python -u scripts/train_all_seeds.py --device cuda
 ```
 
-中断后使用相同种子恢复：
+监控：
 
 ```bash
-python scripts/train_sac.py --seed 20260801 --device cuda --resume
+cat logs/sac_training/launcher_state.json
+tail -f logs/sac_training/seed_20260801.log
 ```
 
-## 3. 选择并冻结唯一候选
+正常中断后使用完全相同的代码、配置、数据和环境数恢复：
 
-三个种子全部完成后运行：
+```bash
+python -u scripts/train_all_seeds.py --device cuda --resume
+```
+
+## 4. 选择并冻结唯一候选
+
+三个种子全部完成后：
 
 ```bash
 python scripts/select_final_candidate.py
-sha256sum outputs/sac_training_v1/selection/final_candidate.npz \
-  > outputs/sac_training_v1/selection/FINAL_CANDIDATE.sha256
-chmod 444 outputs/sac_training_v1/selection/final_candidate.npz
+sha256sum outputs/sac_training/selection/final_candidate.npz \
+  > outputs/sac_training/selection/FINAL_CANDIDATE.sha256
+chmod 444 outputs/sac_training/selection/final_candidate.npz
 ```
 
 从此停止训练、验证和候选选择，不得根据最终测试结果更换候选。
 
-## 4. 此时才解压封存最终测试包
+## 5. 此时才解压封存最终测试包
 
 回到发布包根目录：
 
 ```bash
 cd ../..
 mkdir -p runtime/final_test
-unzip final_test/elc_rl_server_final_test_v1.zip -d runtime/final_test
-cp runtime/training/outputs/sac_training_v1/selection/final_candidate.npz \
+unzip final_test/elc_rl_server_final_test.zip -d runtime/final_test
+cp runtime/training/outputs/sac_training/selection/final_candidate.npz \
   runtime/final_test/final_candidate.npz
 cd runtime/final_test
 sha256sum final_candidate.npz
 ```
 
-该哈希必须与 `runtime/training/outputs/sac_training_v1/selection/FINAL_CANDIDATE.sha256`
-中的值一致。
+该哈希必须与训练目录中 `FINAL_CANDIDATE.sha256` 的值一致。
 
-## 5. 锁定并执行唯一一次最终测试
+## 6. 锁定并执行唯一一次最终测试
 
 ```bash
 python scripts/lock_final_candidate.py \
@@ -100,7 +108,7 @@ python scripts/run_final_test.py \
 最终输出：
 
 ```text
-runtime/final_test/outputs/final_test_v1/
+outputs/final_test/
 ├── final_test_report.json
 └── FINAL_TEST_CONSUMED.json
 ```

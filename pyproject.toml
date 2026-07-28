@@ -12,6 +12,7 @@ requires-python = ">=3.11"
 training = [
     "control>=0.10,<0.11",
     "gymnasium>=1.2,<1.3",
+    "numba>=0.66,<0.67",
     "numpy>=2.0,<3",
     "scipy>=1.14,<2",
     "stable-baselines3>=2.9,<3",

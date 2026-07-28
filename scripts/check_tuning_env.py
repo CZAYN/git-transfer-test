@@ -110,8 +110,8 @@ if __name__ == "__main__":
 
     report = {
         "schema_version": 1,
-        "backend": "physics_v1",
-        "reward_version": "v2_frequency_plus_time_domain",
+        "backend": "physics",
+        "reward": "frequency_plus_time_domain",
         "gymnasium_version": gymnasium.__version__,
         "stable_baselines3_version": stable_baselines3.__version__,
         "gymnasium_check_env": "passed",
@@ -129,7 +129,7 @@ if __name__ == "__main__":
     output = (
         PROJECT_ROOT
         / "outputs"
-        / "environment_validation_physics_v1.json"
+        / "environment_validation_physics.json"
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(

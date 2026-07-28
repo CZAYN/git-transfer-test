@@ -55,18 +55,18 @@ def build_release(project_root: Path, output: Path, overwrite: bool) -> dict[str
     )
     with tempfile.TemporaryDirectory() as temporary:
         temporary_root = Path(temporary)
-        training_zip = temporary_root / "elc_rl_server_training_v1.zip"
-        final_test_zip = temporary_root / "elc_rl_server_final_test_v1.zip"
+        training_zip = temporary_root / "elc_rl_server_training.zip"
+        final_test_zip = temporary_root / "elc_rl_server_final_test.zip"
         training_packager.build_package(root, training_zip, overwrite=False)
         final_test_packager.build_package(root, final_test_zip, overwrite=False)
 
         release_files = (
             (
-                "training/elc_rl_server_training_v1.zip",
+                "training/elc_rl_server_training.zip",
                 training_zip.read_bytes(),
             ),
             (
-                "final_test/elc_rl_server_final_test_v1.zip",
+                "final_test/elc_rl_server_final_test.zip",
                 final_test_zip.read_bytes(),
             ),
             ("SERVER_RELEASE.md", (root / "SERVER_RELEASE.md").read_bytes()),
@@ -81,7 +81,7 @@ def build_release(project_root: Path, output: Path, overwrite: bool) -> dict[str
         ]
         internal_manifest = {
             "schema_version": 1,
-            "package_kind": "physics_v1_single_upload_release",
+            "package_kind": "physics_single_upload_release",
             "workflow_policy": (
                 "extract the training package immediately; keep the final-test "
                 "package unopened until the unique candidate is selected and frozen"
@@ -134,7 +134,7 @@ def main() -> int:
     arguments = parser.parse_args()
     root = arguments.project_root.resolve()
     output = (
-        root / "dist" / "elc_rl_server_release_v1.zip"
+        root / "dist" / "elc_rl_server_release.zip"
         if arguments.output is None
         else arguments.output.resolve()
     )

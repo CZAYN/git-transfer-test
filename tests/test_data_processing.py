@@ -21,11 +21,11 @@ def test_parse_has_expected_point_counts():
 def test_canonical_values_are_finite_and_ordered():
     frame = parse_original_workbook(WORKBOOK)
     arrays = _canonical_arrays(frame)
-    assert np.isfinite(arrays["input_vector_v1"]).all()
+    assert np.isfinite(arrays["input_vector"]).all()
     assert arrays["current_frequency_hz"].tolist() == sorted(arrays["current_frequency_hz"].tolist())
     assert np.all(np.diff(arrays["speed_frequency_hz"], axis=1) > 0)
     assert np.all(np.diff(arrays["position_frequency_hz"]) > 0)
-    assert np.all(np.abs(arrays["input_vector_v1_scaled"][::2]) <= 1.0)
+    assert np.all(np.abs(arrays["input_vector_scaled"][::2]) <= 1.0)
 
 
 def test_quality_rules_keep_ood_and_suspicious_points():

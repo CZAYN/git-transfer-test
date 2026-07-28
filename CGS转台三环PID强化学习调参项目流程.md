@@ -13,7 +13,7 @@
 
 ## 2. 数据与物理电机模型
 
-当前唯一训练后端是 `physics_v1`。电机由导师给出的数学模型和参数构造，包含电气方程、机械方程、三环 PIDF、DOBC、采样延迟、饱和、抗积分饱和、编码器量化/噪声以及负载扰动。
+当前唯一训练后端是 `physics`。电机由导师给出的数学模型和参数构造，包含电气方程、机械方程、三环 PIDF、DOBC、采样延迟、饱和、抗积分饱和、编码器量化/噪声以及负载扰动。
 
 标称电机参数按配置的不确定性范围采样，形成固定且可复现的模型划分：
 
@@ -60,7 +60,7 @@ Reward 奖励综合成本相对上一步的改善，同时惩罚较大的绝对�
 
 项目当前已完成物理模型集合、11 维参数空间、频域/时域评价器、Gymnasium 环境、transition 生成、GPU SAC 冒烟检测、正式服务器训练程序以及训练/验证/测试隔离。历史上的频响代理电机、`plant_ensemble` 和代理评价器路线已从活动代码与数据中删除。
 
-正式训练入口为 `scripts/train_sac.py`，配置为 `config/sac_training_v1.json`。它与 `scripts/train_sac_smoke.py` 相互独立，支持五阶段课程、多随机种子、TensorBoard、定期验证、模型与 Replay Buffer checkpoint、正常终止信号处理和断点续训。
+正式训练入口为 `scripts/train_sac.py`，配置为 `config/sac_training.json`。它与 `scripts/train_sac_smoke.py` 相互独立，支持五阶段课程、多随机种子、TensorBoard、定期验证、模型与 Replay Buffer checkpoint、正常终止信号处理和断点续训。
 
 本机只完成短程工程验收，不进行长程训练。现有 SAC 输出仍属于流程验证结果，不代表正式长程训练已经收敛，也没有消耗封存的最终测试集。
 

@@ -20,7 +20,7 @@ from stable_baselines3.common.callbacks import BaseCallback  # noqa: E402
 from elc_rl.tuning_env import (  # noqa: E402
     PIDTuningEnv,
     STAGE_ORDER,
-    stage_cost_v2,
+    combined_stage_cost,
 )
 
 
@@ -87,7 +87,7 @@ def _audit(
         "safe": bool(frequency_safe and time_safe),
         "frequency_safe": frequency_safe,
         "time_safe": time_safe,
-        "cost": stage_cost_v2(
+        "cost": combined_stage_cost(
             frequency_report,
             time_report,
             stage,
@@ -272,7 +272,7 @@ def train_staged_sac(
     summary = {
         "schema_version": 1,
         "run_kind": "physics-aware GPU SAC pipeline smoke test; not converged final training",
-        "backend": "physics_v1",
+        "backend": "physics",
         "stage_sequence": list(stages),
         "seed": seed,
         "steps_per_stage": steps_per_stage,
@@ -337,7 +337,7 @@ if __name__ == "__main__":
     output_dir = (
         arguments.output_dir
         if arguments.output_dir is not None
-        else PROJECT_ROOT / "outputs" / "sac_smoke_physics_v1"
+        else PROJECT_ROOT / "outputs" / "sac_smoke_physics"
     )
     result = train_staged_sac(
         PROJECT_ROOT,

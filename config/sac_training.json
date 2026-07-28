@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "backend": "physics_v1",
-  "run_name": "sac_training_v1",
+  "backend": "physics",
+  "run_name": "sac_training",
   "description": "Server-oriented staged SAC training for the 11-D three-loop PIDF and DOBC tuner.",
   "default_device": "cuda",
   "seeds": [
@@ -45,11 +45,17 @@
     "tau": 0.005,
     "gamma": 0.98,
     "train_frequency": 1,
-    "gradient_steps": 1,
+    "gradient_steps_per_transition": 1,
     "network_architecture": [
       256,
       256
     ]
+  },
+  "parallelism": {
+    "environments_per_seed": 4,
+    "concurrent_seeds": 3,
+    "start_method": "auto",
+    "numerical_threads_per_process": 1
   },
   "checkpoint": {
     "interval_timesteps": 10000,
@@ -70,6 +76,7 @@
   "runtime": {
     "minimum_free_disk_gb": 10.0,
     "progress_bar": false,
+    "progress_interval_timesteps": 1000,
     "torch_deterministic_algorithms": false
   },
   "isolation": {

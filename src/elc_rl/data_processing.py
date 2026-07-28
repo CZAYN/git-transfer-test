@@ -222,8 +222,8 @@ def _canonical_arrays(frame: pd.DataFrame) -> dict[str, np.ndarray]:
         "speed_response_db_deg": speed_response,
         "position_frequency_hz": position["frequency_hz"].to_numpy(dtype=float),
         "position_response_db_deg": position_response,
-        "input_vector_v1": input_vector,
-        "input_vector_v1_scaled": input_vector / scale,
+        "input_vector": input_vector,
+        "input_vector_scaled": input_vector / scale,
     }
 
 
@@ -355,8 +355,8 @@ def _write_figures(frame: pd.DataFrame, figure_dir: Path) -> list[str]:
 
 def build_processed_data(project_root: Path) -> dict[str, Any]:
     data_dir = project_root / "data"
-    original_path = data_dir / "original" / "OSN600 9# CGS杞彴寮€鐜鍝?xlsx"
-    seed_path = data_dir / "CGS杞彴_RL璁粌绉嶅瓙鏁版嵁.npz"
+    original_path = data_dir / "original" / "OSN600 9# CGS转台开环频响.xlsx"
+    seed_path = data_dir / "CGS转台_RL训练种子数据.npz"
     output_dir = data_dir / "processed"
     figure_dir = output_dir / "figures"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -428,7 +428,7 @@ def build_processed_data(project_root: Path) -> dict[str, Any]:
     _write_json(
         output_dir / "controller_baselines.json",
         {
-            "source": "CGS杞彴_RL璁粌绉嶅瓙鏁版嵁.npz",
+            "source": "CGS转台_RL训练种子数据.npz",
             "output_names": seed["output_names"].tolist(),
             "values": [_json_value(item) for item in baseline_values],
             "note": "Missing controller values remain null; no PID/DOBC values are fabricated.",
@@ -496,5 +496,4 @@ if __name__ == "__main__":
     root = Path(__file__).resolve().parents[2]
     result = build_processed_data(root)
     print(json.dumps(result["counts"], ensure_ascii=False))
-
 

@@ -50,7 +50,7 @@ if __name__ == "__main__":
     if not all(bool(value) for value in lock["declarations"].values()):
         raise ValueError("candidate lock declarations are incomplete")
 
-    output_dir = PROJECT_ROOT / "outputs" / "final_test_v1"
+    output_dir = PROJECT_ROOT / "outputs" / "final_test"
     report_path = output_dir / "final_test_report.json"
     marker_path = output_dir / "FINAL_TEST_CONSUMED.json"
     if report_path.exists() or marker_path.exists():

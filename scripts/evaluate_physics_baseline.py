@@ -36,7 +36,7 @@ if __name__ == "__main__":
     comparison = compare_physics_to_measured_frf(PROJECT_ROOT)
     report = {
         "schema_version": 1,
-        "backend": "physics_v1",
+        "backend": "physics",
         "time_audit_scope": "all_56_models" if args.full_time_audit else "runtime_4_models",
         "parameter_names": list(frequency_evaluator.space.names),
         "parameters": parameters.tolist(),
@@ -44,7 +44,7 @@ if __name__ == "__main__":
         "time_domain": time_domain,
         "measured_frf_comparison": comparison,
     }
-    output = PROJECT_ROOT / "outputs" / "physics_v1_validation_report.json"
+    output = PROJECT_ROOT / "outputs" / "physics_validation_report.json"
     output.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )

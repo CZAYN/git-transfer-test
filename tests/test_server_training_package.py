@@ -33,8 +33,12 @@ def test_server_package_is_reproducible_and_excludes_sealed_artifacts(tmp_path):
             archive.read("SERVER_PACKAGE_MANIFEST.json").decode("utf-8")
         )
     assert "scripts/train_sac.py" in names
-    assert "config/sac_training_v1.json" in names
-    assert "data/processed/physics_motor_ensemble_v1.npz" in names
+    assert "scripts/train_all_seeds.py" in names
+    assert "scripts/benchmark_parallel_env.py" in names
+    assert "config/sac_training.json" in names
+    assert "data/processed/physics_motor_ensemble.npz" in names
+    assert "src/elc_rl/parallel_env.py" in names
+    assert "src/elc_rl/simulation_kernel.py" in names
     assert embedded["entry_count"] == len(names) - 1
     assert not any("physics_motor_test" in name for name in names)
     assert not any("final_test" in name for name in names)

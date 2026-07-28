@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 def test_physics_frequency_baseline_is_safe_over_56_models():
     evaluator = get_physics_controller_evaluator(PROJECT_ROOT)
     report = evaluator.audit(evaluator.space.initial)
-    assert report["backend"] == "physics_v1"
+    assert report["backend"] == "physics"
     assert report["evaluated_model_count"] == 56
     assert report["safety"]["safe"]
     expected = {
@@ -36,7 +36,7 @@ def test_physics_nonlinear_training_report_is_safe_and_finite():
     evaluator = get_physics_time_domain_evaluator(PROJECT_ROOT)
     sampled = frequency.sample_training_indices(np.random.default_rng(20260722))
     report = evaluator.train(evaluator.space.initial, sampled)
-    assert report["backend"] == "physics_v1"
+    assert report["backend"] == "physics"
     assert report["safety"]["safe"]
     for split in ("current_reference", "speed_train", "position_surrogate"):
         summary = report["splits"][split]
@@ -46,7 +46,7 @@ def test_physics_nonlinear_training_report_is_safe_and_finite():
         assert summary["speed_limit_ratio_worst"] <= 1.001
 
 
-def test_default_environment_uses_physics_v1_and_one_coherent_motor():
+def test_default_environment_uses_physics_and_one_coherent_motor():
     environment = PIDTuningEnv(
         PROJECT_ROOT,
         stage="joint",
@@ -55,8 +55,8 @@ def test_default_environment_uses_physics_v1_and_one_coherent_motor():
         initial_perturbation=0.0,
     )
     observation, info = environment.reset(seed=20260722, options={"perturb": False})
-    assert environment.backend == "physics_v1"
-    assert info["backend"] == "physics_v1"
+    assert environment.backend == "physics"
+    assert info["backend"] == "physics"
     assert len(info["sampled_model_ids"]) == 1
     assert info["fast_safe"] and info["audit_safe"]
     assert environment.observation_space.contains(observation)

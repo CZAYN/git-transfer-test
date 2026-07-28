@@ -19,7 +19,7 @@ from elc_rl.physics_evaluator import (  # noqa: E402
     get_physics_controller_evaluator,
     get_physics_time_domain_evaluator,
 )
-from elc_rl.tuning_env import stage_cost_v2  # noqa: E402
+from elc_rl.tuning_env import combined_stage_cost  # noqa: E402
 
 
 DEFAULT_SEED = 20260715
@@ -68,7 +68,7 @@ def run_optimizer_baseline(
             parameters = space.denormalize(np.asarray(normalized, dtype=np.float64))
             frequency_report = frequency_evaluator.train(parameters, sampled_indices)
             time_report = time_evaluator.train(parameters, sampled_indices)
-            cost = stage_cost_v2(
+            cost = combined_stage_cost(
                 frequency_report,
                 time_report,
                 "joint",
@@ -127,7 +127,7 @@ def run_optimizer_baseline(
             "safe": bool(frequency_safe and time_safe),
             "frequency_safe": frequency_safe,
             "time_safe": time_safe,
-            "cost": stage_cost_v2(
+            "cost": combined_stage_cost(
                 frequency_report,
                 time_report,
                 "joint",
@@ -180,7 +180,7 @@ def run_optimizer_baseline(
     sac_candidate_path = (
         project_root
         / "outputs"
-        / "sac_smoke_physics_v1"
+        / "sac_smoke_physics"
         / "final_candidate.npz"
     )
     if sac_candidate_path.exists():
@@ -195,7 +195,7 @@ def run_optimizer_baseline(
 
     report = {
         "schema_version": 1,
-        "backend": "physics_v1",
+        "backend": "physics",
         "run_kind": (
             "deterministic differential-evolution simulation baseline; "
             "limited-budget, not final convergence"
@@ -251,7 +251,7 @@ if __name__ == "__main__":
     output_dir = (
         arguments.output_dir
         if arguments.output_dir is not None
-        else PROJECT_ROOT / "outputs" / "optimizer_baseline_physics_v1"
+        else PROJECT_ROOT / "outputs" / "optimizer_baseline_physics"
     )
     baseline_report = run_optimizer_baseline(
         PROJECT_ROOT,

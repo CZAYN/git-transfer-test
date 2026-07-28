@@ -30,7 +30,7 @@ def main() -> int:
 
     project_root = arguments.project_root.resolve()
     runs_root = (
-        project_root / "outputs" / "sac_training_v1"
+        project_root / "outputs" / "sac_training"
         if arguments.runs_root is None
         else arguments.runs_root.resolve()
     )

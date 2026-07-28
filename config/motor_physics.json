@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "model_id": "mentor_motor_physics_v1",
+  "model_id": "mentor_motor_physics",
   "description": "Single-axis FOC-decoupled servo model supplied by the mentor; all values use SI units.",
   "sample_period_s": 0.0002,
   "nominal_parameters": {

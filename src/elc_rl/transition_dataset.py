@@ -208,8 +208,8 @@ def generate_transition_dataset(
     validation = validate_transition_archive(output_path)
     manifest = {
         "schema_version": TRANSITION_SCHEMA_VERSION,
-        "task_id": "cgs_three_loop_pid_dobc_v1",
-        "environment_backend": "physics_v1",
+        "task_id": "cgs_three_loop_pid_dobc",
+        "environment_backend": "physics",
         "archive": output_path.name,
         "sha256": _sha256(output_path),
         "seed": int(seed),

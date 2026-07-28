@@ -89,8 +89,8 @@ data["speed_response_db_deg"]         # shape: (6, 15, 2)
 data["position_frequency_hz"]         # shape: (15,)
 data["position_response_db_deg"]      # shape: (15, 2)
 
-data["input_vector_v1"]               # shape: (96,)
-data["input_vector_v1_scaled"]        # shape: (96,)
+data["input_vector"]               # shape: (96,)
+data["input_vector_scaled"]        # shape: (96,)
 
 data["identified_model_ids"]          # shape: (5,)
 data["identified_model_matrix"]       # shape: (5, 9)
@@ -180,7 +180,7 @@ Settling time     ≈ 0.004 s
 角色划分：
 
 ```text
-500 mA        V1 标称对象
+500 mA        标称对象
 100/250/700   域随机化对象
 10/50         鲁棒性测试，不作标称对象
 ```
@@ -268,7 +268,7 @@ c_t
 直接优先使用：
 
 ```python
-data["input_vector_v1_scaled"]
+data["input_vector_scaled"]
 ```
 
 原始向量也必须保留用于绘图和解释。
@@ -397,8 +397,8 @@ class CGSSeedData:
     speed_response_db_deg: np.ndarray
     position_frequency_hz: np.ndarray
     position_response_db_deg: np.ndarray
-    input_vector_v1: np.ndarray
-    input_vector_v1_scaled: np.ndarray
+    input_vector: np.ndarray
+    input_vector_scaled: np.ndarray
     identified_model_ids: list[str]
     identified_model_matrix: np.ndarray
     output_names: list[str]
@@ -564,7 +564,7 @@ speed loop dt   ≈ 200 us
 position_loop_dt_s: 0.001
 ```
 
-只能作为 V1 可配置假设，日志必须显示：
+只能作为当前可配置假设，日志必须显示：
 
 ```text
 ASSUMPTION: position_loop_dt_s is not measured from Excel.
@@ -631,7 +631,7 @@ i_{\mathrm{ref}}=i_{\mathrm{PID}}-i_{\mathrm{DOB}}
 由于原文件未给出完整 DOBC 结构，该实现必须标记为：
 
 ```text
-V1 assumption: first-order Q-filter DOBC.
+Assumption: first-order Q-filter DOBC.
 ```
 
 不得将它表述为原设备唯一正确结构。
@@ -778,7 +778,7 @@ class CGSTuningEnv(gym.Env):
 
 ## 14.1 Observation
 
-推荐 V1：
+当前推荐：
 
 ```text
 96 维 频响上下文

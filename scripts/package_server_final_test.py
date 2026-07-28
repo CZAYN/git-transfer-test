@@ -12,15 +12,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 FINAL_TEST_PACKAGE_FILES = (
     "pyproject.toml",
-    "config/motor_physics_v1.json",
-    "config/final_test_spec_v1.json",
-    "data/processed/controller_parameter_space_physics_v1.json",
+    "config/motor_physics.json",
+    "config/final_test_spec.json",
+    "data/processed/controller_parameter_space.json",
     "data/processed/frf_tasks.npz",
     "data/processed/frf_tasks_manifest.json",
-    "data/processed/physics_motor_ensemble_v1.npz",
-    "data/processed/physics_motor_ensemble_v1_manifest.json",
-    "data/processed/physics_motor_test_v1.npz",
-    "data/processed/physics_motor_test_v1_manifest.json",
+    "data/processed/physics_motor_ensemble.npz",
+    "data/processed/physics_motor_ensemble_manifest.json",
+    "data/processed/physics_motor_test.npz",
+    "data/processed/physics_motor_test_manifest.json",
     "scripts/lock_final_candidate.py",
     "scripts/run_final_test.py",
     "src/elc_rl/__init__.py",
@@ -30,6 +30,7 @@ FINAL_TEST_PACKAGE_FILES = (
     "src/elc_rl/physics_evaluator.py",
     "src/elc_rl/physics_motor_model.py",
     "src/elc_rl/physics_test_dataset.py",
+    "src/elc_rl/simulation_kernel.py",
     "src/elc_rl/task_dataset.py",
 )
 
@@ -75,7 +76,7 @@ def build_package(project_root: Path, output: Path, overwrite: bool) -> dict[str
 
     internal_manifest = {
         "schema_version": 1,
-        "package_kind": "physics_v1_sealed_final_test_only",
+        "package_kind": "physics_sealed_final_test_only",
         "data_policy": (
             "extract only after formal training, validation and candidate selection "
             "are complete and the unique candidate hash is frozen"
@@ -127,7 +128,7 @@ def main() -> int:
     arguments = parser.parse_args()
     root = arguments.project_root.resolve()
     output = (
-        root / "dist" / "elc_rl_server_final_test_v1.zip"
+        root / "dist" / "elc_rl_server_final_test.zip"
         if arguments.output is None
         else arguments.output.resolve()
     )

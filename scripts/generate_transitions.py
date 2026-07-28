@@ -38,7 +38,7 @@ if __name__ == "__main__":
         else PROJECT_ROOT
         / "data"
         / "processed"
-        / f"rl_transitions_physics_v1_seed{arguments.seed}.npz"
+        / f"rl_transitions_physics_seed{arguments.seed}.npz"
     )
     manifest = generate_transition_dataset(
         PROJECT_ROOT,

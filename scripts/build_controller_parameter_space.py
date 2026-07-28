@@ -27,7 +27,7 @@ if __name__ == "__main__":
     json_path = PROJECT_ROOT / "data" / "processed" / json_name
     npz_path = PROJECT_ROOT / "data" / "processed" / npz_name
     summary = {
-        "profile": "physics_v1",
+        "profile": "physics",
         "parameter_count": len(payload["parameters"]),
         "source_baselines": sum(
             parameter["source_kind"] == "excel_baseline"

@@ -48,7 +48,7 @@ if __name__ == "__main__":
     )
     if output.exists():
         raise FileExistsError(f"candidate lock already exists: {output}")
-    final_report = PROJECT_ROOT / "outputs" / "final_test_v1" / "final_test_report.json"
+    final_report = PROJECT_ROOT / "outputs" / "final_test" / "final_test_report.json"
     if final_report.exists():
         raise PermissionError("final test has already been consumed")
 
@@ -63,7 +63,7 @@ if __name__ == "__main__":
     lock = {
         "schema_version": 1,
         "status": "training_complete_candidate_locked",
-        "backend": "physics_v1",
+        "backend": "physics",
         "test_suite_id": spec["test_suite_id"],
         "candidate_path": str(candidate),
         "candidate_file_sha256": _sha256(candidate),

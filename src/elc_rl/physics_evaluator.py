@@ -1,4 +1,4 @@
-"""Frequency- and time-domain evaluators for the physics-v1 motor backend."""
+"""Frequency- and time-domain evaluators for the physics motor backend."""
 
 from __future__ import annotations
 
@@ -378,7 +378,7 @@ def _physics_cost_and_safety(
 class PhysicsControllerEvaluator:
     """Frequency evaluator over coherent randomized physical motor instances."""
 
-    backend = "physics_v1"
+    backend = "physics"
 
     def __init__(self, project_root: Path) -> None:
         self.project_root = Path(project_root).resolve()
@@ -392,7 +392,7 @@ class PhysicsControllerEvaluator:
             self.ensemble["active_for_audit"] == 1
         ).astype(np.int64)
         if self.training_indices.size != 40 or self.audit_indices.size != 56:
-            raise ValueError("physics-v1 ensemble split sizes are invalid")
+            raise ValueError("physics ensemble split sizes are invalid")
 
     def sample_training_indices(self, rng: np.random.Generator) -> np.ndarray:
         return np.asarray([int(rng.choice(self.training_indices))], dtype=np.int64)
@@ -400,9 +400,9 @@ class PhysicsControllerEvaluator:
     def validate_sampled_indices(self, indices: np.ndarray) -> np.ndarray:
         values = np.asarray(indices, dtype=np.int64)
         if values.shape != (1,):
-            raise ValueError("physics-v1 requires one coherent model index per episode")
+            raise ValueError("physics requires one coherent model index per episode")
         if int(values[0]) not in set(self.training_indices.tolist()):
-            raise ValueError("physics-v1 sampled model is not in the training split")
+            raise ValueError("physics sampled model is not in the training split")
         return values
 
     def model_ids(self, indices: np.ndarray) -> tuple[str, ...]:
@@ -441,7 +441,7 @@ class PhysicsControllerEvaluator:
             parts.append(features.reshape(-1))
         vector = np.concatenate(parts).astype(np.float64)
         if vector.shape != (96,) or not np.isfinite(vector).all():
-            raise ValueError("physics-v1 sampled FRF vector is invalid")
+            raise ValueError("physics sampled FRF vector is invalid")
         return vector
 
     def _evaluate(
@@ -487,7 +487,7 @@ class PhysicsControllerEvaluator:
         }
         required = {"current_reference", "speed_train", "position_surrogate"}
         if not required.issubset(summaries):
-            raise ValueError("physics-v1 evaluation is missing training loop summaries")
+            raise ValueError("physics evaluation is missing training loop summaries")
         dobc = dobc_metrics(values, self.space)
         targets = self.config.target_crossovers_hz
         cost, safety = _physics_cost_and_safety(summaries, dobc, targets)
@@ -626,7 +626,7 @@ def _safe_ratio(value: float, baseline: float) -> float:
 class PhysicsTimeDomainEvaluator:
     """Nonlinear discrete-time evaluator with limits, anti-windup and DOBC."""
 
-    backend = "physics_v1"
+    backend = "physics"
 
     def __init__(self, frequency_evaluator: PhysicsControllerEvaluator) -> None:
         self.frequency_evaluator = frequency_evaluator
@@ -919,11 +919,11 @@ def build_physics_baseline_evaluation(project_root: Path) -> dict[str, Any]:
     )
     report = {
         "schema_version": 1,
-        "backend": "physics_v1",
+        "backend": "physics",
         "frequency": frequency,
         "time_domain": time_domain,
     }
-    output = Path(project_root) / "outputs" / "physics_v1_baseline_evaluation.json"
+    output = Path(project_root) / "outputs" / "physics_baseline_evaluation.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -989,7 +989,7 @@ def compare_physics_to_measured_frf(project_root: Path) -> dict[str, Any]:
         }
     report: dict[str, Any] = {
         "schema_version": 1,
-        "backend": "physics_v1",
+        "backend": "physics",
         "model_id": evaluator.config.payload["model_id"],
         "comparison_type": "held_out_diagnostic_no_parameter_fitting",
         "current": metrics("current", task.current_frf),
@@ -1003,7 +1003,7 @@ def compare_physics_to_measured_frf(project_root: Path) -> dict[str, Any]:
             "training_role": "this report validates model mismatch; it does not turn measured FRFs into the training plant",
         },
     }
-    output = root / "outputs" / "physics_v1_frf_comparison.json"
+    output = root / "outputs" / "physics_frf_comparison.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

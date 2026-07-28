@@ -38,7 +38,7 @@ def _install_signal_handlers(controller: StopController) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Run or resume one independent seed of formal physics-v1 SAC training."
+            "Run or resume one independent seed of formal physics SAC training."
         )
     )
     parser.add_argument("--project-root", type=Path, default=PROJECT_ROOT)
@@ -46,15 +46,13 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
-    parser.add_argument("--resume", action="store_true")
     parser.add_argument(
-        "--allow-code-migration",
-        action="store_true",
-        help=(
-            "with --resume, permit only the audited boundary/resume hotfix source "
-            "files to differ; configuration and data changes remain forbidden"
-        ),
+        "--n-envs",
+        type=int,
+        default=None,
+        help="override the configured number of parallel environments per seed",
     )
+    parser.add_argument("--resume", action="store_true")
     parser.add_argument(
         "--engineering-check-steps-per-stage",
         type=int,
@@ -65,8 +63,6 @@ def main() -> int:
         ),
     )
     arguments = parser.parse_args()
-    if arguments.allow_code_migration and not arguments.resume:
-        parser.error("--allow-code-migration requires --resume")
 
     project_root = arguments.project_root.resolve()
     config = load_formal_training_config(project_root, arguments.config)
@@ -85,10 +81,10 @@ def main() -> int:
         run_dir=output_dir,
         device=arguments.device,
         resume=arguments.resume,
-        allow_code_migration=arguments.allow_code_migration,
         engineering_steps_per_stage=(
             arguments.engineering_check_steps_per_stage
         ),
+        n_envs=arguments.n_envs,
         stop_controller=stop_controller,
     )
     print(
@@ -106,6 +102,7 @@ def main() -> int:
                     "eligible_for_multi_seed_selection",
                     False,
                 ),
+                "n_envs": result.get("n_envs"),
             },
             ensure_ascii=False,
             indent=2,

@@ -15,12 +15,12 @@ from elc_rl.physics_evaluator import (  # noqa: E402
     get_physics_controller_evaluator,
     get_physics_time_domain_evaluator,
 )
-from elc_rl.tuning_env import stage_cost_v2  # noqa: E402
+from elc_rl.tuning_env import combined_stage_cost  # noqa: E402
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Audit a physics-v1 11-D candidate over all 56 motor models."
+        description="Audit a physics 11-D candidate over all 56 motor models."
     )
     parser.add_argument("candidate", type=Path)
     parser.add_argument("--output", type=Path, default=None)
@@ -36,12 +36,12 @@ if __name__ == "__main__":
     safe = bool(frequency["safety"]["safe"] and time_domain["safety"]["safe"])
     report = {
         "schema_version": 1,
-        "backend": "physics_v1",
+        "backend": "physics",
         "candidate": str(candidate_path),
         "parameter_names": list(frequency_evaluator.space.names),
         "parameters": parameters.tolist(),
         "safe_over_all_56_models": safe,
-        "joint_cost": stage_cost_v2(
+        "joint_cost": combined_stage_cost(
             frequency,
             time_domain,
             "joint",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Any
 
@@ -255,13 +256,13 @@ def time_stage_cost(report: dict[str, Any], stage: str) -> float:
     return float(loop_costs[stage])
 
 
-def stage_cost_v2(
+def combined_stage_cost(
     frequency_report: dict[str, Any],
     time_report: dict[str, Any],
     stage: str,
     position_target_hz: float,
 ) -> float:
-    """Combined frequency/time-domain objective used by Reward V2."""
+    """Combined frequency/time-domain objective used by combined frequency/time-domain reward."""
 
     return float(
         stage_cost(frequency_report, stage, position_target_hz)
@@ -303,6 +304,7 @@ class PIDTuningEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         audit_interval: int = 8,
         initial_perturbation: float = 0.05,
         base_parameters: np.ndarray | None = None,
+        worker_rank: int = 0,
         render_mode: None = None,
     ) -> None:
         super().__init__()
@@ -317,11 +319,14 @@ class PIDTuningEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         if render_mode is not None:
             raise ValueError("PIDTuningEnv does not implement rendering")
         self.project_root = Path(project_root).resolve()
-        self.backend = "physics_v1"
+        self.backend = "physics"
         self.stage = stage
         self.max_episode_steps = int(max_episode_steps)
         self.audit_interval = int(audit_interval)
         self.initial_perturbation = float(initial_perturbation)
+        self.worker_rank = int(worker_rank)
+        if self.worker_rank < 0:
+            raise ValueError("worker_rank must be non-negative")
         self.evaluator = get_physics_controller_evaluator(self.project_root)
         self.time_evaluator = get_physics_time_domain_evaluator(self.project_root)
         self.parameter_space = self.evaluator.space
@@ -388,6 +393,8 @@ class PIDTuningEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         self._last_time_audit_report: dict[str, Any] | None = None
         self._previous_stage_cost = 0.0
         self._step_count = 0
+        self._total_step_count = 0
+        self._episode_count = 0
 
     @property
     def parameters(self) -> np.ndarray:
@@ -453,7 +460,9 @@ class PIDTuningEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         return {
             "backend": self.backend,
             "stage": self.stage,
+            "worker_rank": self.worker_rank,
             "step": self._step_count,
+            "total_step": self._total_step_count,
             "stage_cost": float(frequency_cost + time_cost),
             "frequency_stage_cost": float(frequency_cost),
             "time_stage_cost": float(time_cost),
@@ -497,7 +506,11 @@ class PIDTuningEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         seed: int | None = None,
         options: dict[str, Any] | None = None,
     ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+        if seed is not None:
+            self._total_step_count = 0
+            self._episode_count = 0
         super().reset(seed=seed)
+        self._episode_count += 1
         options = {} if options is None else dict(options)
         perturb = bool(options.get("perturb", True))
         explicit_parameters = options.get("parameters")
@@ -538,11 +551,87 @@ class PIDTuningEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         self._last_time_audit_report = time_audit
         sampled = self.evaluator.sampled_frf_vector(self._sampled_indices, self.task)
         self._sampled_frf = np.clip(sampled, -5.0, 5.0).astype(np.float32)
-        self._previous_stage_cost = stage_cost_v2(
+        self._previous_stage_cost = combined_stage_cost(
             report, time_report, self.stage, self.position_target_hz
         )
         self._step_count = 0
         return self._observation(), self._info(audit_performed=True)
+
+    def export_state(self) -> dict[str, Any]:
+        """Return the complete mutable state needed for exact vector-env resume."""
+
+        if (
+            self._parameters is None
+            or self._sampled_indices is None
+            or self._sampled_frf is None
+            or self._report is None
+            or self._time_report is None
+        ):
+            raise RuntimeError("environment must be reset before exporting state")
+        return {
+            "schema_version": 1,
+            "stage": self.stage,
+            "worker_rank": self.worker_rank,
+            "parameters": self._parameters.copy(),
+            "sampled_indices": self._sampled_indices.copy(),
+            "sampled_frf": self._sampled_frf.copy(),
+            "report": copy.deepcopy(self._report),
+            "time_report": copy.deepcopy(self._time_report),
+            "last_audit_report": copy.deepcopy(self._last_audit_report),
+            "last_time_audit_report": copy.deepcopy(
+                self._last_time_audit_report
+            ),
+            "previous_stage_cost": float(self._previous_stage_cost),
+            "step_count": int(self._step_count),
+            "total_step_count": int(self._total_step_count),
+            "episode_count": int(self._episode_count),
+            "np_random_state": copy.deepcopy(self.np_random.bit_generator.state),
+            "action_space_random_state": copy.deepcopy(
+                self.action_space.np_random.bit_generator.state
+            ),
+        }
+
+    def restore_state(self, state: dict[str, Any]) -> None:
+        """Restore a state produced by :meth:`export_state`."""
+
+        if int(state.get("schema_version", -1)) != 1:
+            raise ValueError("unsupported environment state schema")
+        if state.get("stage") != self.stage:
+            raise ValueError("environment state stage mismatch")
+        if int(state.get("worker_rank", -1)) != self.worker_rank:
+            raise ValueError("environment state worker rank mismatch")
+        parameters = np.asarray(state["parameters"], dtype=np.float64)
+        sampled_indices = self.evaluator.validate_sampled_indices(
+            np.asarray(state["sampled_indices"], dtype=np.int64)
+        )
+        sampled_frf = np.asarray(state["sampled_frf"], dtype=np.float32)
+        if parameters.shape != (11,) or sampled_frf.shape != (96,):
+            raise ValueError("environment state contains invalid arrays")
+        self.parameter_space.normalize(parameters)
+        self._parameters = parameters.copy()
+        self._sampled_indices = sampled_indices.copy()
+        self._sampled_frf = sampled_frf.copy()
+        self._report = copy.deepcopy(state["report"])
+        self._time_report = copy.deepcopy(state["time_report"])
+        self._last_audit_report = copy.deepcopy(state["last_audit_report"])
+        self._last_time_audit_report = copy.deepcopy(
+            state["last_time_audit_report"]
+        )
+        self._previous_stage_cost = float(state["previous_stage_cost"])
+        self._step_count = int(state["step_count"])
+        self._total_step_count = int(state["total_step_count"])
+        self._episode_count = int(state["episode_count"])
+        self._np_random = np.random.default_rng()
+        self._np_random.bit_generator.state = copy.deepcopy(
+            state["np_random_state"]
+        )
+        self.action_space.seed(0)
+        self.action_space.np_random.bit_generator.state = copy.deepcopy(
+            state["action_space_random_state"]
+        )
+        observation = self._observation()
+        if not self.observation_space.contains(observation):
+            raise ValueError("restored environment observation is invalid")
 
     def step(
         self, action: np.ndarray
@@ -561,7 +650,8 @@ class PIDTuningEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         time_report = self.time_evaluator.train(candidate, self._sampled_indices)
 
         self._step_count += 1
-        audit_performed = self._step_count % self.audit_interval == 0
+        self._total_step_count += 1
+        audit_performed = self._total_step_count % self.audit_interval == 0
         audit_report = self.evaluator.audit(candidate) if audit_performed else None
         time_audit_report = (
             self.time_evaluator.audit(candidate) if audit_performed else None
@@ -574,7 +664,7 @@ class PIDTuningEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
             and _time_report_safe(time_audit_report)
         )
         safe = fast_safe and audit_safe
-        new_stage_cost = stage_cost_v2(
+        new_stage_cost = combined_stage_cost(
             report, time_report, self.stage, self.position_target_hz
         )
         improvement = self._previous_stage_cost - new_stage_cost

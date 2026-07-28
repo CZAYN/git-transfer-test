@@ -103,8 +103,8 @@ def test_training_runtime_does_not_import_or_name_final_test_artifacts():
     forbidden = (
         "physics_test_dataset",
         "final_test_evaluator",
-        "physics_motor_test_v1",
-        "final_test_spec_v1",
+        "physics_motor_test",
+        "final_test_spec",
     )
     runtime_files = (
         PROJECT_ROOT / "src" / "elc_rl" / "tuning_env.py",

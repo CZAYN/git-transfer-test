@@ -20,18 +20,18 @@ from .physics_motor_model import (
 )
 
 
-FINAL_TEST_SPEC_RELATIVE_PATH = Path("config") / "final_test_spec_v1.json"
+FINAL_TEST_SPEC_RELATIVE_PATH = Path("config") / "final_test_spec.json"
 FINAL_TEST_ENSEMBLE_RELATIVE_PATH = (
-    Path("data") / "processed" / "physics_motor_test_v1.npz"
+    Path("data") / "processed" / "physics_motor_test.npz"
 )
 FINAL_TEST_MANIFEST_RELATIVE_PATH = (
-    Path("data") / "processed" / "physics_motor_test_v1_manifest.json"
+    Path("data") / "processed" / "physics_motor_test_manifest.json"
 )
 SOURCE_ENSEMBLE_RELATIVE_PATH = (
-    Path("data") / "processed" / "physics_motor_ensemble_v1.npz"
+    Path("data") / "processed" / "physics_motor_ensemble.npz"
 )
 SOURCE_MANIFEST_RELATIVE_PATH = (
-    Path("data") / "processed" / "physics_motor_ensemble_v1_manifest.json"
+    Path("data") / "processed" / "physics_motor_ensemble_manifest.json"
 )
 
 
@@ -53,7 +53,7 @@ def load_final_test_spec(project_root: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if int(payload["schema_version"]) != 1:
         raise ValueError("unsupported final-test specification schema")
-    if payload["test_suite_id"] != "physics_motor_final_test_v1":
+    if payload["test_suite_id"] != "physics_motor_final_test":
         raise ValueError("unexpected final-test suite identifier")
     if payload["isolation_policy"]["evaluate_candidate_before_training_is_locked"]:
         raise ValueError("final-test isolation policy must forbid pre-training evaluation")
@@ -213,7 +213,7 @@ def validate_physics_test_ensemble(
         raise ValueError(f"final-test ensemble is missing arrays: {sorted(missing)}")
     if int(ensemble["schema_version"]) != 1:
         raise ValueError("unexpected final-test ensemble schema")
-    if str(ensemble["test_suite_id"].item()) != "physics_motor_final_test_v1":
+    if str(ensemble["test_suite_id"].item()) != "physics_motor_final_test":
         raise ValueError("unexpected final-test suite identifier")
     if tuple(ensemble["parameter_names"].tolist()) != MODEL_PARAMETER_NAMES:
         raise ValueError("final-test parameter order is invalid")
@@ -277,7 +277,7 @@ def build_physics_test_ensemble(
     root = Path(project_root).resolve()
     output = root / FINAL_TEST_ENSEMBLE_RELATIVE_PATH
     manifest_path = root / FINAL_TEST_MANIFEST_RELATIVE_PATH
-    final_output_dir = root / "outputs" / "final_test_v1"
+    final_output_dir = root / "outputs" / "final_test"
     if overwrite and (
         (final_output_dir / "final_test_report.json").exists()
         or (final_output_dir / "FINAL_TEST_CONSUMED.json").exists()
@@ -300,7 +300,7 @@ def build_physics_test_ensemble(
     validation_mask = source["role"] == "validation"
     manifest: dict[str, Any] = {
         "schema_version": 1,
-        "test_suite_id": "physics_motor_final_test_v1",
+        "test_suite_id": "physics_motor_final_test",
         "status": "sealed_unconsumed",
         "candidate_evaluated_during_construction": False,
         "test_ensemble_path": str(FINAL_TEST_ENSEMBLE_RELATIVE_PATH).replace("\\", "/"),
@@ -308,7 +308,7 @@ def build_physics_test_ensemble(
         "test_spec_path": str(FINAL_TEST_SPEC_RELATIVE_PATH).replace("\\", "/"),
         "test_spec_sha256": _sha256(root / FINAL_TEST_SPEC_RELATIVE_PATH),
         "physics_config_sha256": _sha256(
-            root / "config" / "motor_physics_v1.json"
+            root / "config" / "motor_physics.json"
         ),
         "frozen_training_validation_ensemble_path": str(
             SOURCE_ENSEMBLE_RELATIVE_PATH
@@ -343,7 +343,7 @@ def build_physics_test_ensemble(
                 np.count_nonzero(ensemble["final_test_only"])
             ),
             "final_report_exists_at_seal_time": bool(
-                (root / "outputs" / "final_test_v1" / "final_test_report.json").exists()
+                (root / "outputs" / "final_test" / "final_test_report.json").exists()
             ),
         },
     }
@@ -364,7 +364,7 @@ def load_physics_test_ensemble(project_root: Path) -> dict[str, np.ndarray]:
     checks = {
         output: manifest["test_ensemble_sha256"],
         root / FINAL_TEST_SPEC_RELATIVE_PATH: manifest["test_spec_sha256"],
-        root / "config" / "motor_physics_v1.json": manifest[
+        root / "config" / "motor_physics.json": manifest[
             "physics_config_sha256"
         ],
         root / SOURCE_ENSEMBLE_RELATIVE_PATH: manifest[

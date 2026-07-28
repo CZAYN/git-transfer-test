@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "model_id": "mentor_motor_physics_v1",
-  "config_path": "config/motor_physics_v1.json",
-  "config_sha256": "94d2cab39511a6badb60799cdb89b61e7937da8324dc8f1910f6f26927066671",
-  "ensemble_path": "data/processed/physics_motor_ensemble_v1.npz",
+  "model_id": "mentor_motor_physics",
+  "config_path": "config/motor_physics.json",
+  "config_sha256": "d0bec2fe98bcd677d8cea7684d3a927e0ed595ee98f0f95b0c4e82cfd09d64fa",
+  "ensemble_path": "data/processed/physics_motor_ensemble.npz",
   "model_count": 56,
   "training_models": 40,
   "validation_models": 16,

@@ -1,4 +1,4 @@
-"""Auditable 11-dimensional physics-v1 controller parameter space."""
+"""Auditable 11-dimensional physics controller parameter space."""
 
 from __future__ import annotations
 
@@ -28,8 +28,8 @@ PARAMETER_ORDER = (
     "kdcurr",
 )
 
-PHYSICS_PARAMETER_SPACE_JSON = "controller_parameter_space_physics_v1.json"
-PHYSICS_PARAMETER_SPACE_NPZ = "controller_parameter_space_physics_v1.npz"
+PHYSICS_PARAMETER_SPACE_JSON = "controller_parameter_space.json"
+PHYSICS_PARAMETER_SPACE_NPZ = "controller_parameter_space.npz"
 _BOUNDARY_EPS_FACTOR = 128.0
 
 
@@ -257,7 +257,7 @@ def _space_from_payload(payload: dict[str, Any]) -> ControllerParameterSpace:
 
 
 def derive_physics_controller_initials(project_root: Path) -> np.ndarray:
-    """Derive the 11 physics-v1 initials from the mentor model and bandwidths."""
+    """Derive the 11 physics initials from the mentor model and bandwidths."""
 
     config = load_physics_motor_config(project_root)
     motor = config.nominal
@@ -319,7 +319,7 @@ def derive_physics_controller_initials(project_root: Path) -> np.ndarray:
 
 
 def build_physics_controller_parameter_space(project_root: Path) -> dict[str, Any]:
-    """Build a separate 11-D space for the physics-v1 training backend."""
+    """Build a separate 11-D space for the physics training backend."""
 
     root = Path(project_root).resolve()
     config = load_physics_motor_config(root)
@@ -354,7 +354,7 @@ def build_physics_controller_parameter_space(project_root: Path) -> dict[str, An
             action_step_fraction=step,
             source_kind="mentor_physics_model_derived",
             source=(
-                "physics-v1 loop-shaping with the mentor motor model and fixed "
+                "physics loop-shaping with the mentor motor model and fixed "
                 "filtered-derivative semantics"
             ),
             original_value=None,
@@ -412,7 +412,7 @@ def build_physics_controller_parameter_space(project_root: Path) -> dict[str, An
 
     payload: dict[str, Any] = {
         "schema_version": 2,
-        "profile": "physics_v1",
+        "profile": "physics",
         "task_id": task.task_id,
         "parameter_order": list(PARAMETER_ORDER),
         "controller_convention": (
@@ -466,7 +466,7 @@ def build_physics_controller_parameter_space(project_root: Path) -> dict[str, An
             "required_before_hardware": [
                 "confirm voltage/current/speed limits against drive and motor ratings",
                 "confirm encoder resolution and feedback filtering",
-                "compare physics-v1 FRFs with all measured three-loop FRFs",
+                "compare physics FRFs with all measured three-loop FRFs",
                 "validate candidates in HIL and bounded low-energy tests",
             ],
         },
@@ -482,7 +482,7 @@ def build_physics_controller_parameter_space(project_root: Path) -> dict[str, An
     np.savez_compressed(
         output_dir / PHYSICS_PARAMETER_SPACE_NPZ,
         schema_version=np.asarray(2, dtype=np.int16),
-        profile=np.asarray("physics_v1"),
+        profile=np.asarray("physics"),
         task_id=np.asarray(task.task_id),
         parameter_names=np.asarray(space.names),
         initial=space.initial,
@@ -508,8 +508,8 @@ def load_physics_controller_parameter_space(
         / PHYSICS_PARAMETER_SPACE_JSON
     )
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("profile") != "physics_v1":
-        raise ValueError("controller parameter file is not the physics-v1 profile")
+    if payload.get("profile") != "physics":
+        raise ValueError("controller parameter file is not the physics profile")
     space = _space_from_payload(payload)
     space.validate()
     return space

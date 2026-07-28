@@ -1,4 +1,4 @@
-"""Shared numerical helpers for the physics-v1 controller evaluators."""
+"""Shared numerical helpers for the physics controller evaluators."""
 
 from __future__ import annotations
 

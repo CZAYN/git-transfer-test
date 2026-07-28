@@ -106,6 +106,67 @@ def test_episode_truncation_and_periodic_audit():
     assert not terminated and truncated
 
 
+def test_audit_schedule_continues_across_episode_resets():
+    environment = PIDTuningEnv(
+        PROJECT_ROOT,
+        stage="joint",
+        max_episode_steps=2,
+        audit_interval=3,
+        initial_perturbation=0.0,
+    )
+    environment.reset(seed=21, options={"perturb": False})
+    zero = np.zeros(11, dtype=np.float32)
+    environment.step(zero)
+    _, _, _, truncated, second_info = environment.step(zero)
+    assert truncated
+    assert not second_info["audit_performed"]
+
+    environment.reset(options={"perturb": False})
+    _, _, _, _, third_info = environment.step(zero)
+    assert third_info["total_step"] == 3
+    assert third_info["audit_performed"]
+
+    environment.reset(seed=21, options={"perturb": False})
+    _, _, _, _, reseeded_info = environment.step(zero)
+    assert reseeded_info["total_step"] == 1
+    assert not reseeded_info["audit_performed"]
+
+
+def test_exported_environment_state_restores_exact_next_transition():
+    first = PIDTuningEnv(
+        PROJECT_ROOT,
+        stage="joint",
+        max_episode_steps=8,
+        audit_interval=3,
+        initial_perturbation=0.02,
+        worker_rank=2,
+    )
+    first.reset(seed=314159)
+    first.step(np.full(11, 0.05, dtype=np.float32))
+    state = first.export_state()
+    expected = first.step(np.full(11, -0.03, dtype=np.float32))
+
+    restored = PIDTuningEnv(
+        PROJECT_ROOT,
+        stage="joint",
+        max_episode_steps=8,
+        audit_interval=3,
+        initial_perturbation=0.02,
+        worker_rank=2,
+    )
+    restored.reset(seed=1)
+    restored.restore_state(state)
+    actual = restored.step(np.full(11, -0.03, dtype=np.float32))
+
+    for key in expected[0]:
+        assert np.array_equal(expected[0][key], actual[0][key])
+    assert expected[1:4] == actual[1:4]
+    assert expected[4]["worker_rank"] == actual[4]["worker_rank"] == 2
+    assert expected[4]["total_step"] == actual[4]["total_step"]
+    assert expected[4]["stage_cost"] == actual[4]["stage_cost"]
+    assert np.array_equal(expected[4]["parameters"], actual[4]["parameters"])
+
+
 def test_every_stage_can_reset_and_step():
     for stage in STAGE_ORDER:
         environment = PIDTuningEnv(

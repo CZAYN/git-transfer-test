@@ -1,4 +1,4 @@
-"""Server-oriented formal SAC training for the physics-v1 tuning environment.
+"""Server-oriented formal SAC training for the physics tuning environment.
 
 This module intentionally depends on the production environment and evaluators
 directly.  It does not import the small pipeline-check training entry point or
@@ -20,44 +20,42 @@ import tempfile
 import time
 from typing import Any, Iterable, Mapping
 
+import cloudpickle
 import gymnasium
 import numpy as np
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.vec_env import VecEnv
 import torch
 
+from .parallel_env import configure_thread_limits, create_training_vec_env
 from .physics_evaluator import (
     get_physics_controller_evaluator,
     get_physics_time_domain_evaluator,
 )
-from .tuning_env import PIDTuningEnv, STAGE_ORDER, stage_cost_v2
+from .tuning_env import PIDTuningEnv, STAGE_ORDER, combined_stage_cost
 
 
 TRAINING_INPUT_RELATIVE_PATHS = (
-    "config/motor_physics_v1.json",
-    "data/processed/controller_parameter_space_physics_v1.json",
+    "config/motor_physics.json",
+    "data/processed/controller_parameter_space.json",
     "data/processed/frf_tasks.npz",
     "data/processed/frf_tasks_manifest.json",
-    "data/processed/physics_motor_ensemble_v1.npz",
-    "data/processed/physics_motor_ensemble_v1_manifest.json",
+    "data/processed/physics_motor_ensemble.npz",
+    "data/processed/physics_motor_ensemble_manifest.json",
     "src/elc_rl/__init__.py",
     "src/elc_rl/controller_parameters.py",
     "src/elc_rl/evaluation_utils.py",
+    "src/elc_rl/parallel_env.py",
     "src/elc_rl/physics_evaluator.py",
     "src/elc_rl/physics_motor_model.py",
+    "src/elc_rl/simulation_kernel.py",
     "src/elc_rl/sac_training.py",
     "src/elc_rl/task_dataset.py",
     "src/elc_rl/tuning_env.py",
     "scripts/train_sac.py",
 )
 
-AUDITED_CODE_MIGRATION_PATHS = frozenset(
-    {
-        "scripts/train_sac.py",
-        "src/elc_rl/controller_parameters.py",
-        "src/elc_rl/sac_training.py",
-    }
-)
 PROGRESS_REPORT_INTERVAL_TIMESTEPS = 1000
 
 
@@ -137,7 +135,7 @@ def load_formal_training_config(
 ) -> FormalTrainingConfig:
     root = Path(project_root).resolve()
     path = (
-        root / "config" / "sac_training_v1.json"
+        root / "config" / "sac_training.json"
         if config_path is None
         else Path(config_path).resolve()
     )
@@ -153,6 +151,7 @@ def load_formal_training_config(
             "stages",
             "environment",
             "sac",
+            "parallelism",
             "checkpoint",
             "validation",
             "tensorboard",
@@ -161,8 +160,8 @@ def load_formal_training_config(
         ),
         "formal training configuration",
     )
-    if payload["schema_version"] != 1 or payload["backend"] != "physics_v1":
-        raise ValueError("formal training configuration is not physics-v1 schema 1")
+    if payload["schema_version"] != 1 or payload["backend"] != "physics":
+        raise ValueError("formal training configuration is not physics schema 1")
 
     raw_stages = payload["stages"]
     if not isinstance(raw_stages, list):
@@ -210,19 +209,19 @@ def load_formal_training_config(
             "tau",
             "gamma",
             "train_frequency",
-            "gradient_steps",
+            "gradient_steps_per_transition",
             "network_architecture",
         ),
         "SAC configuration",
     )
     if str(sac["policy"]) != "MultiInputPolicy":
-        raise ValueError("physics-v1 formal training requires MultiInputPolicy")
+        raise ValueError("physics formal training requires MultiInputPolicy")
     positive_integer_fields = (
         "buffer_size",
         "learning_starts",
         "batch_size",
         "train_frequency",
-        "gradient_steps",
+        "gradient_steps_per_transition",
     )
     if any(int(sac[name]) <= 0 for name in positive_integer_fields):
         raise ValueError("SAC integer hyperparameters must be positive")
@@ -231,6 +230,29 @@ def load_formal_training_config(
     architecture = tuple(int(value) for value in sac["network_architecture"])
     if not architecture or any(value <= 0 for value in architecture):
         raise ValueError("network_architecture must contain positive widths")
+
+    parallelism = payload["parallelism"]
+    _required_keys(
+        parallelism,
+        (
+            "environments_per_seed",
+            "concurrent_seeds",
+            "start_method",
+            "numerical_threads_per_process",
+        ),
+        "parallelism configuration",
+    )
+    environment_count = int(parallelism["environments_per_seed"])
+    if environment_count <= 0:
+        raise ValueError("environments_per_seed must be positive")
+    if int(parallelism["concurrent_seeds"]) <= 0:
+        raise ValueError("concurrent_seeds must be positive")
+    if int(parallelism["numerical_threads_per_process"]) <= 0:
+        raise ValueError("numerical_threads_per_process must be positive")
+    if str(parallelism["start_method"]) not in {"auto", "spawn", "forkserver"}:
+        raise ValueError("parallel start_method is invalid")
+    if any(stage.total_timesteps % environment_count for stage in stages):
+        raise ValueError("stage timesteps must be divisible by environments_per_seed")
 
     checkpoint = payload["checkpoint"]
     _required_keys(
@@ -242,6 +264,10 @@ def load_formal_training_config(
         raise ValueError("checkpoint interval must be positive")
     if int(checkpoint["keep_last"]) <= 0:
         raise ValueError("checkpoint keep_last must be positive")
+    if int(checkpoint["interval_timesteps"]) % environment_count:
+        raise ValueError(
+            "checkpoint interval must be divisible by environments_per_seed"
+        )
 
     validation = payload["validation"]
     _required_keys(
@@ -267,6 +293,14 @@ def load_formal_training_config(
         raise ValueError("validation counts and intervals must be positive")
     if float(validation["minimum_cost_improvement"]) < 0.0:
         raise ValueError("minimum_cost_improvement must be non-negative")
+    if int(validation["interval_timesteps"]) % environment_count:
+        raise ValueError(
+            "validation interval must be divisible by environments_per_seed"
+        )
+
+    runtime = payload["runtime"]
+    if int(runtime.get("progress_interval_timesteps", 0)) <= 0:
+        raise ValueError("progress_interval_timesteps must be positive")
 
     isolation = payload["isolation"]
     if (
@@ -314,7 +348,7 @@ def build_training_input_manifest(
     fingerprint = hashlib.sha256(_canonical_json(files)).hexdigest()
     return {
         "schema_version": 1,
-        "backend": "physics_v1",
+        "backend": "physics",
         "files": files,
         "fingerprint": fingerprint,
     }
@@ -498,7 +532,9 @@ class CandidateCollectorCallback(BaseCallback):
         self.progress_reporter = progress_reporter
 
     def _on_step(self) -> bool:
-        for info in self.locals.get("infos", []):
+        infos = list(self.locals.get("infos", []))
+        first_timestep = int(self.model.num_timesteps) - len(infos) + 1
+        for rank, info in enumerate(infos):
             if not bool(info.get("fast_safe", False)):
                 continue
             self.pool.add(
@@ -506,7 +542,7 @@ class CandidateCollectorCallback(BaseCallback):
                     stage=self.pool.stage,
                     fast_cost=float(info["stage_cost"]),
                     parameters=np.asarray(info["parameters"], dtype=np.float64),
-                    global_timestep=int(self.model.num_timesteps),
+                    global_timestep=first_timestep + rank,
                 )
             )
         if self.progress_reporter is not None:
@@ -548,7 +584,7 @@ def audit_parameters(
         "safe": bool(frequency_safe and time_safe),
         "frequency_safe": frequency_safe,
         "time_safe": time_safe,
-        "cost": stage_cost_v2(
+        "cost": combined_stage_cost(
             frequency,
             time_domain,
             stage,
@@ -598,7 +634,7 @@ def validate_candidate_pool(
     selected = min(safe, key=lambda report: float(report["cost"])) if safe else None
     return {
         "schema_version": 1,
-        "backend": "physics_v1",
+        "backend": "physics",
         "stage": stage,
         "validation_kind": "runtime_training_validation",
         "candidate_count": len(audits),
@@ -680,7 +716,7 @@ def select_stage_curriculum_parameters(
     )
     report = {
         "schema_version": 1,
-        "backend": "physics_v1",
+        "backend": "physics",
         "stage": stage,
         "runtime_validation": runtime,
         "finalist_audit_scope": (
@@ -700,6 +736,7 @@ def _system_manifest(device: str) -> dict[str, Any]:
         "python": platform.python_version(),
         "platform": platform.platform(),
         "numpy": np.__version__,
+        "numba": __import__("numba").__version__,
         "gymnasium": gymnasium.__version__,
         "stable_baselines3": __import__("stable_baselines3").__version__,
         "torch": torch.__version__,
@@ -792,6 +829,13 @@ def _save_resume_checkpoint(
         if bool(config.payload["checkpoint"]["save_replay_buffer"]):
             model.save_replay_buffer(temporary / "replay_buffer.pkl")
         _save_rng_state(temporary / "rng_state.pt")
+        model_environment = (
+            model.get_env() if hasattr(model, "get_env") else None
+        )
+        if model_environment is not None:
+            environment_states = model_environment.env_method("export_state")
+            with (temporary / "environment_states.pkl").open("wb") as stream:
+                cloudpickle.dump(environment_states, stream)
         metadata = {
             "schema_version": 1,
             "created_at_utc": utc_now(),
@@ -801,6 +845,12 @@ def _save_resume_checkpoint(
             "global_timesteps_completed": state["global_timesteps_completed"],
             "config_sha256": state["config_sha256"],
             "input_fingerprint": state["input_fingerprint"],
+            "n_envs": int(
+                model_environment.num_envs
+                if model_environment is not None
+                else getattr(model, "n_envs", 1)
+            ),
+            "environment_state_saved": model_environment is not None,
         }
         _atomic_write_json(temporary / "checkpoint.json", metadata)
         (temporary / "COMPLETE").write_text("complete\n", encoding="utf-8")
@@ -849,7 +899,7 @@ def _prune_resume_checkpoints(
 def _load_checkpoint(
     run_dir: Path,
     state: Mapping[str, Any],
-    environment: PIDTuningEnv,
+    environment: VecEnv,
     device: str,
     tensorboard_log: str | None,
     expect_replay_buffer: bool,
@@ -862,11 +912,56 @@ def _load_checkpoint(
         raise ValueError("resume checkpoint is outside the run checkpoint directory")
     if not (checkpoint / "COMPLETE").is_file():
         raise ValueError("resume checkpoint is incomplete")
+    checkpoint_metadata = json.loads(
+        (checkpoint / "checkpoint.json").read_text(encoding="utf-8")
+    )
+    checkpoint_stage_index = int(checkpoint_metadata["stage_index"])
+    state_stage_index = int(state["stage_index"])
+    same_stage = (
+        checkpoint_stage_index == state_stage_index
+        and checkpoint_metadata["stage"] == state["stage"]
+    )
+    crossed_stage_boundary = (
+        state_stage_index == checkpoint_stage_index + 1
+        and int(state["stage_timesteps_completed"]) == 0
+        and int(checkpoint_metadata["global_timesteps_completed"])
+        == int(state["global_timesteps_completed"])
+    )
+    if not same_stage and not crossed_stage_boundary:
+        raise ValueError(
+            "checkpoint stage is incompatible with trainer state: "
+            f"checkpoint=({checkpoint_stage_index}, "
+            f"{checkpoint_metadata['stage']}), "
+            f"state=({state_stage_index}, {state['stage']})"
+        )
+    expected_n_envs = int(checkpoint_metadata.get("n_envs", 1))
+    if environment.num_envs != expected_n_envs:
+        raise ValueError(
+            "checkpoint environment-count mismatch: "
+            f"checkpoint={expected_n_envs}, current={environment.num_envs}"
+        )
+    environment_state_path = checkpoint / "environment_states.pkl"
+    if same_stage and bool(
+        checkpoint_metadata.get("environment_state_saved", False)
+    ):
+        if not environment_state_path.is_file():
+            raise FileNotFoundError("checkpoint has no vector environment state")
+        with environment_state_path.open("rb") as stream:
+            environment_states = cloudpickle.load(stream)
+        if len(environment_states) != environment.num_envs:
+            raise ValueError("checkpoint vector environment state count mismatch")
+        for rank, environment_state in enumerate(environment_states):
+            environment.env_method(
+                "restore_state",
+                environment_state,
+                indices=rank,
+            )
     model = SAC.load(
         checkpoint / "model.zip",
         env=environment,
         device=device,
         tensorboard_log=tensorboard_log,
+        force_reset=not same_stage,
     )
     replay_path = checkpoint / "replay_buffer.pkl"
     if expect_replay_buffer:
@@ -884,7 +979,7 @@ def _load_checkpoint(
 
 
 def _new_model(
-    environment: PIDTuningEnv,
+    environment: VecEnv,
     seed: int,
     device: str,
     tensorboard_log: str | None,
@@ -915,10 +1010,19 @@ def _new_model(
 def _effective_sac_parameters(
     config: FormalTrainingConfig,
     run_kind: str,
+    n_envs: int,
 ) -> dict[str, Any]:
     parameters = dict(config.payload["sac"])
     parameters["network_architecture"] = list(
         config.payload["sac"]["network_architecture"]
+    )
+    updates_per_transition = int(
+        parameters.pop("gradient_steps_per_transition")
+    )
+    parameters["gradient_steps"] = (
+        int(parameters["train_frequency"])
+        * int(n_envs)
+        * updates_per_transition
     )
     if run_kind == "engineering_check":
         parameters["buffer_size"] = min(int(parameters["buffer_size"]), 512)
@@ -944,85 +1048,6 @@ def _effective_stage_steps(
     return {
         stage.name: int(engineering_steps_per_stage)
         for stage in config.stages
-    }
-
-
-def _manifest_files_by_path(
-    manifest: Mapping[str, Any],
-) -> dict[str, Mapping[str, Any]]:
-    files = manifest.get("files")
-    if not isinstance(files, list):
-        raise ValueError("training input manifest has no file list")
-    by_path: dict[str, Mapping[str, Any]] = {}
-    for item in files:
-        if not isinstance(item, Mapping) or "path" not in item:
-            raise ValueError("training input manifest contains an invalid file entry")
-        path = str(item["path"])
-        if path in by_path:
-            raise ValueError(f"training input manifest repeats path: {path}")
-        by_path[path] = item
-    return by_path
-
-
-def _plan_code_migration(
-    run_dir: Path,
-    state: Mapping[str, Any],
-    current_manifest: Mapping[str, Any],
-    *,
-    allowed: bool,
-) -> dict[str, Any] | None:
-    previous_fingerprint = str(state.get("input_fingerprint", ""))
-    current_fingerprint = str(current_manifest.get("fingerprint", ""))
-    if previous_fingerprint == current_fingerprint:
-        return None
-    if not allowed:
-        raise ValueError(
-            "resume input fingerprint changed; rerun with --allow-code-migration "
-            "only for an audited source-code hotfix"
-        )
-
-    run_manifest_path = Path(run_dir) / "run_manifest.json"
-    if not run_manifest_path.is_file():
-        raise FileNotFoundError(
-            f"cannot audit code migration without {run_manifest_path}"
-        )
-    run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
-    previous_manifest = run_manifest.get("training_inputs")
-    if not isinstance(previous_manifest, Mapping):
-        raise ValueError("run manifest has no original training input manifest")
-    if previous_manifest.get("fingerprint") != previous_fingerprint:
-        raise ValueError(
-            "trainer state and original run manifest input fingerprints disagree"
-        )
-
-    previous_files = _manifest_files_by_path(previous_manifest)
-    current_files = _manifest_files_by_path(current_manifest)
-    changed_paths = sorted(
-        path
-        for path in set(previous_files) | set(current_files)
-        if previous_files.get(path) != current_files.get(path)
-    )
-    disallowed = sorted(set(changed_paths) - AUDITED_CODE_MIGRATION_PATHS)
-    if not changed_paths or disallowed:
-        raise ValueError(
-            "code migration changed non-approved training inputs: "
-            f"{disallowed or changed_paths}"
-        )
-    changes = [
-        {
-            "path": path,
-            "previous": previous_files.get(path),
-            "current": current_files.get(path),
-        }
-        for path in changed_paths
-    ]
-    return {
-        "schema_version": 1,
-        "kind": "audited_boundary_and_resume_hotfix",
-        "migrated_at_utc": utc_now(),
-        "previous_fingerprint": previous_fingerprint,
-        "current_fingerprint": current_fingerprint,
-        "changed_files": changes,
     }
 
 
@@ -1079,17 +1104,19 @@ def _initial_state(
     seed: int,
     run_kind: str,
     effective_steps: Mapping[str, int],
+    n_envs: int,
     initial_parameters: np.ndarray,
 ) -> dict[str, Any]:
     return {
         "schema_version": 1,
-        "backend": "physics_v1",
+        "backend": "physics",
         "status": "running",
         "run_kind": run_kind,
         "seed": int(seed),
         "config_sha256": config.sha256,
         "input_fingerprint": input_manifest["fingerprint"],
         "effective_stage_timesteps": dict(effective_steps),
+        "n_envs": int(n_envs),
         "stage_index": 0,
         "stage": STAGE_ORDER[0],
         "stage_timesteps_completed": 0,
@@ -1117,14 +1144,15 @@ def _verify_resume_state(
     seed: int,
     run_kind: str,
     effective_steps: Mapping[str, int],
-    code_migration: Mapping[str, Any] | None = None,
+    n_envs: int,
 ) -> None:
     expected = {
-        "backend": "physics_v1",
+        "backend": "physics",
         "seed": int(seed),
         "config_sha256": config.sha256,
         "run_kind": run_kind,
         "effective_stage_timesteps": dict(effective_steps),
+        "n_envs": int(n_envs),
     }
     mismatches = {
         key: (state.get(key), value)
@@ -1133,13 +1161,8 @@ def _verify_resume_state(
     }
     if mismatches:
         raise ValueError(f"resume state is incompatible: {mismatches}")
-    fingerprint_changed = (
-        state.get("input_fingerprint") != input_manifest["fingerprint"]
-    )
-    if fingerprint_changed and code_migration is None:
-        raise ValueError("resume input fingerprint changed without an audited migration")
-    if not fingerprint_changed and code_migration is not None:
-        raise ValueError("unexpected code migration for identical input fingerprints")
+    if state.get("input_fingerprint") != input_manifest["fingerprint"]:
+        raise ValueError("resume input fingerprint changed")
     if state.get("status") == "completed":
         return
     stage_index = int(state["stage_index"])
@@ -1183,8 +1206,8 @@ def run_formal_training(
     run_dir: Path,
     device: str | None = None,
     resume: bool = False,
-    allow_code_migration: bool = False,
     engineering_steps_per_stage: int | None = None,
+    n_envs: int | None = None,
     stop_controller: StopController | None = None,
 ) -> dict[str, Any]:
     """Run or resume one independent formal-training seed."""
@@ -1205,24 +1228,46 @@ def run_formal_training(
         else "engineering_check"
     )
     effective_steps = _effective_stage_steps(config, engineering_steps_per_stage)
-    effective_sac = _effective_sac_parameters(config, run_kind)
+    configured_n_envs = int(
+        config.payload["parallelism"]["environments_per_seed"]
+    )
+    selected_n_envs = configured_n_envs if n_envs is None else int(n_envs)
+    if selected_n_envs <= 0:
+        raise ValueError("n_envs must be positive")
+    if any(int(value) % selected_n_envs for value in effective_steps.values()):
+        raise ValueError("effective stage timesteps must be divisible by n_envs")
+    for interval_name, interval in (
+        (
+            "checkpoint",
+            int(config.payload["checkpoint"]["interval_timesteps"]),
+        ),
+        (
+            "validation",
+            int(config.payload["validation"]["interval_timesteps"]),
+        ),
+    ):
+        if interval % selected_n_envs:
+            raise ValueError(f"{interval_name} interval must be divisible by n_envs")
+    numerical_threads = int(
+        config.payload["parallelism"]["numerical_threads_per_process"]
+    )
+    configure_thread_limits(numerical_threads)
+    torch.set_num_threads(numerical_threads)
+    effective_sac = _effective_sac_parameters(
+        config,
+        run_kind,
+        selected_n_envs,
+    )
     input_manifest = build_training_input_manifest(root, config)
     evaluator = get_physics_controller_evaluator(root)
     initial_parameters = evaluator.space.initial.copy()
     controller = stop_controller if stop_controller is not None else StopController()
-    code_migration: dict[str, Any] | None = None
 
     if resume:
         state_path = output / "trainer_state.json"
         if not state_path.is_file():
             raise FileNotFoundError(f"missing resume state: {state_path}")
         state = json.loads(state_path.read_text(encoding="utf-8"))
-        code_migration = _plan_code_migration(
-            output,
-            state,
-            input_manifest,
-            allowed=allow_code_migration,
-        )
         _verify_resume_state(
             state,
             config,
@@ -1230,7 +1275,7 @@ def run_formal_training(
             seed,
             run_kind,
             effective_steps,
-            code_migration,
+            selected_n_envs,
         )
         if state["status"] == "completed":
             summary_path = output / "seed_summary.json"
@@ -1253,11 +1298,12 @@ def run_formal_training(
             seed,
             run_kind,
             effective_steps,
+            selected_n_envs,
             initial_parameters,
         )
         manifest = {
             "schema_version": 1,
-            "backend": "physics_v1",
+            "backend": "physics",
             "run_kind": run_kind,
             "run_name": config.run_name,
             "seed": int(seed),
@@ -1268,6 +1314,11 @@ def run_formal_training(
             "configuration": config.payload,
             "effective_stage_timesteps": effective_steps,
             "effective_sac": effective_sac,
+            "effective_parallelism": {
+                "n_envs": selected_n_envs,
+                "start_method": config.payload["parallelism"]["start_method"],
+                "numerical_threads_per_process": numerical_threads,
+            },
             "training_inputs": input_manifest,
             "system": _system_manifest(selected_device),
             "data_policy": "training and validation ensemble only",
@@ -1293,6 +1344,7 @@ def run_formal_training(
     )
     model: SAC | None = None
     environment: PIDTuningEnv | None = None
+    training_environment: VecEnv | None = None
     session_started = time.perf_counter()
     previous_wall_time = float(state.get("accumulated_wall_time_s", 0.0))
     run_total_steps = sum(int(effective_steps[stage]) for stage in STAGE_ORDER)
@@ -1306,6 +1358,8 @@ def run_formal_training(
                 state["stage_base_parameters"], dtype=np.float64
             )
             env_config = config.payload["environment"]
+            if environment is not None:
+                environment.close()
             environment = PIDTuningEnv(
                 root,
                 stage=stage,
@@ -1316,13 +1370,30 @@ def run_formal_training(
             )
             stage_seed = seed + 1009 * stage_index
             environment.action_space.seed(stage_seed)
+            environment.reset(
+                seed=stage_seed + 999_983,
+                options={"perturb": False},
+            )
+            training_environment = create_training_vec_env(
+                root,
+                stage=stage,
+                max_episode_steps=int(env_config["max_episode_steps"]),
+                audit_interval=int(env_config["audit_interval"]),
+                initial_perturbation=float(env_config["initial_perturbation"]),
+                base_parameters=stage_base,
+                n_envs=selected_n_envs,
+                stage_seed=stage_seed,
+                start_method=str(
+                    config.payload["parallelism"]["start_method"]
+                ),
+            )
 
             if model is None:
                 if resume and int(state["global_timesteps_completed"]) > 0:
                     model = _load_checkpoint(
                         output,
                         state,
-                        environment,
+                        training_environment,
                         selected_device,
                         tensorboard_log,
                         expect_replay_buffer=bool(
@@ -1334,38 +1405,18 @@ def run_formal_training(
                         effective_steps,
                         int(model.num_timesteps),
                     )
-                    if code_migration is not None:
-                        state["input_fingerprint"] = input_manifest["fingerprint"]
-                        state.setdefault("code_migrations", []).append(code_migration)
-                    if progress_reconciled or code_migration is not None:
+                    if progress_reconciled:
                         _save_resume_checkpoint(model, output, state, config)
-                        if code_migration is not None:
-                            run_manifest_path = output / "run_manifest.json"
-                            run_manifest = json.loads(
-                                run_manifest_path.read_text(encoding="utf-8")
-                            )
-                            run_manifest["training_inputs"] = input_manifest
-                            run_manifest.setdefault("code_migrations", []).append(
-                                code_migration
-                            )
-                            _atomic_write_json(run_manifest_path, run_manifest)
-                            print(
-                                "[resume] audited code migration accepted for "
-                                f"{len(code_migration['changed_files'])} files",
-                                flush=True,
-                            )
-                            code_migration = None
-                        if progress_reconciled:
-                            print(
-                                "[resume] reconciled checkpoint progress to "
-                                f"stage_steps={state['stage_timesteps_completed']} "
-                                f"global_steps={state['global_timesteps_completed']}",
-                                flush=True,
-                            )
+                        print(
+                            "[resume] reconciled checkpoint progress to "
+                            f"stage_steps={state['stage_timesteps_completed']} "
+                            f"global_steps={state['global_timesteps_completed']}",
+                            flush=True,
+                        )
                     resume = False
                 else:
                     model = _new_model(
-                        environment,
+                        training_environment,
                         seed,
                         selected_device,
                         tensorboard_log,
@@ -1373,7 +1424,7 @@ def run_formal_training(
                     )
             else:
                 previous = model.get_env()
-                model.set_env(environment, force_reset=True)
+                model.set_env(training_environment, force_reset=True)
                 if previous is not None:
                     previous.close()
 
@@ -1398,6 +1449,9 @@ def run_formal_training(
                 previous_wall_time_s=previous_wall_time,
                 session_started=session_started,
                 initial_global_steps=int(model.num_timesteps),
+                interval_timesteps=int(
+                    config.payload["runtime"]["progress_interval_timesteps"]
+                ),
             )
             progress_reporter.report(int(model.num_timesteps), force=True)
             next_checkpoint = (
@@ -1488,6 +1542,7 @@ def run_formal_training(
                         "status": "interrupted",
                         "run_kind": run_kind,
                         "seed": seed,
+                        "n_envs": selected_n_envs,
                         "stage": stage,
                         "stage_timesteps_completed": completed,
                         "global_timesteps_completed": int(model.num_timesteps),
@@ -1567,6 +1622,24 @@ def run_formal_training(
                 initial_perturbation=0.0,
                 base_parameters=final_parameters_for_resume,
             )
+            final_stage_seed = seed + 1009 * (len(STAGE_ORDER) - 1)
+            environment.reset(
+                seed=final_stage_seed + 999_983,
+                options={"perturb": False},
+            )
+            training_environment = create_training_vec_env(
+                root,
+                stage="joint",
+                max_episode_steps=int(env_config["max_episode_steps"]),
+                audit_interval=int(env_config["audit_interval"]),
+                initial_perturbation=0.0,
+                base_parameters=final_parameters_for_resume,
+                n_envs=selected_n_envs,
+                stage_seed=final_stage_seed,
+                start_method=str(
+                    config.payload["parallelism"]["start_method"]
+                ),
+            )
             if int(state["global_timesteps_completed"]) <= 0:
                 raise RuntimeError(
                     "completed stage state has no model checkpoint to finalize"
@@ -1574,7 +1647,7 @@ def run_formal_training(
             model = _load_checkpoint(
                 output,
                 state,
-                environment,
+                training_environment,
                 selected_device,
                 tensorboard_log,
                 expect_replay_buffer=bool(
@@ -1636,10 +1709,11 @@ def run_formal_training(
         _atomic_write_json(output / "seed_candidate_audit.json", final_audit)
         summary = {
             "schema_version": 1,
-            "backend": "physics_v1",
+            "backend": "physics",
             "status": "completed",
             "run_kind": run_kind,
             "seed": seed,
+            "n_envs": selected_n_envs,
             "device": str(model.device),
             "total_timesteps": int(model.num_timesteps),
             "effective_stage_timesteps": effective_steps,
@@ -1691,7 +1765,15 @@ def run_formal_training(
         _atomic_write_json(output / "trainer_state.json", state)
         raise
     finally:
+        attached_environment = model.get_env() if model is not None else None
         _close_model_environment(model)
+        if (
+            training_environment is not None
+            and training_environment is not attached_environment
+        ):
+            training_environment.close()
+        if environment is not None:
+            environment.close()
 
 
 def discover_seed_candidates(runs_root: Path) -> list[Path]:
@@ -1741,7 +1823,7 @@ def select_multi_seed_candidate(
         safe = bool(
             frequency["safety"]["safe"] and time_report_safe(time_domain)
         )
-        cost = stage_cost_v2(
+        cost = combined_stage_cost(
             frequency,
             time_domain,
             "joint",
@@ -1749,7 +1831,7 @@ def select_multi_seed_candidate(
         )
         audit = {
             "schema_version": 1,
-            "backend": "physics_v1",
+            "backend": "physics",
             "candidate": str(path),
             "seed": seed,
             "input_fingerprint": fingerprint,
@@ -1810,7 +1892,7 @@ def select_multi_seed_candidate(
     )
     leaderboard = {
         "schema_version": 1,
-        "backend": "physics_v1",
+        "backend": "physics",
         "selection_policy": (
             "hard safety over all 56 training/validation models, "
             "then minimum joint validation cost"

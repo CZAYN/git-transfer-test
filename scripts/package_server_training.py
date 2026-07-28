@@ -14,22 +14,26 @@ SERVER_PACKAGE_FILES = (
     "pyproject.toml",
     "environment-server.yml",
     "SERVER_TRAINING.md",
-    "config/motor_physics_v1.json",
-    "config/sac_training_v1.json",
-    "data/processed/controller_parameter_space_physics_v1.json",
+    "config/motor_physics.json",
+    "config/sac_training.json",
+    "data/processed/controller_parameter_space.json",
     "data/processed/frf_tasks.npz",
     "data/processed/frf_tasks_manifest.json",
-    "data/processed/physics_motor_ensemble_v1.npz",
-    "data/processed/physics_motor_ensemble_v1_manifest.json",
+    "data/processed/physics_motor_ensemble.npz",
+    "data/processed/physics_motor_ensemble_manifest.json",
+    "scripts/benchmark_parallel_env.py",
     "scripts/check_server_runtime.py",
     "scripts/select_final_candidate.py",
+    "scripts/train_all_seeds.py",
     "scripts/train_sac.py",
     "src/elc_rl/__init__.py",
     "src/elc_rl/controller_parameters.py",
     "src/elc_rl/evaluation_utils.py",
+    "src/elc_rl/parallel_env.py",
     "src/elc_rl/physics_evaluator.py",
     "src/elc_rl/physics_motor_model.py",
     "src/elc_rl/sac_training.py",
+    "src/elc_rl/simulation_kernel.py",
     "src/elc_rl/task_dataset.py",
     "src/elc_rl/tuning_env.py",
 )
@@ -76,7 +80,7 @@ def build_package(project_root: Path, output: Path, overwrite: bool) -> dict[str
 
     internal_manifest = {
         "schema_version": 1,
-        "package_kind": "physics_v1_formal_training_only",
+        "package_kind": "physics_formal_training_only",
         "data_policy": "contains only training and validation runtime inputs",
         "entry_count": len(entries),
         "entries": entries,
@@ -125,7 +129,7 @@ def main() -> int:
     arguments = parser.parse_args()
     root = arguments.project_root.resolve()
     output = (
-        root / "dist" / "elc_rl_server_training_v1.zip"
+        root / "dist" / "elc_rl_server_training.zip"
         if arguments.output is None
         else arguments.output.resolve()
     )

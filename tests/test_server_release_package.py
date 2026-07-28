@@ -33,7 +33,8 @@ def test_final_test_package_is_reproducible_and_excludes_training_runtime(tmp_pa
         )
     assert "scripts/lock_final_candidate.py" in names
     assert "scripts/run_final_test.py" in names
-    assert "data/processed/physics_motor_test_v1.npz" in names
+    assert "data/processed/physics_motor_test.npz" in names
+    assert "src/elc_rl/simulation_kernel.py" in names
     assert embedded["entry_count"] == len(names) - 1
     assert "scripts/train_sac.py" not in names
     assert "scripts/select_final_candidate.py" not in names
@@ -53,12 +54,12 @@ def test_single_upload_release_contains_separate_inner_archives(tmp_path):
         manifest = json.loads(
             release.read("SERVER_RELEASE_MANIFEST.json").decode("utf-8")
         )
-        training_bytes = release.read("training/elc_rl_server_training_v1.zip")
-        final_test_bytes = release.read("final_test/elc_rl_server_final_test_v1.zip")
+        training_bytes = release.read("training/elc_rl_server_training.zip")
+        final_test_bytes = release.read("final_test/elc_rl_server_final_test.zip")
 
     assert names == {
-        "training/elc_rl_server_training_v1.zip",
-        "final_test/elc_rl_server_final_test_v1.zip",
+        "training/elc_rl_server_training.zip",
+        "final_test/elc_rl_server_final_test.zip",
         "SERVER_RELEASE.md",
         "SERVER_RELEASE_MANIFEST.json",
     }
@@ -70,6 +71,10 @@ def test_single_upload_release_contains_separate_inner_archives(tmp_path):
         final_test_names = set(final_test.namelist())
 
     assert "scripts/train_sac.py" in training_names
+    assert "scripts/train_all_seeds.py" in training_names
+    assert "src/elc_rl/parallel_env.py" in training_names
+    assert "src/elc_rl/simulation_kernel.py" in training_names
     assert not any("physics_motor_test" in name for name in training_names)
-    assert "data/processed/physics_motor_test_v1.npz" in final_test_names
+    assert "data/processed/physics_motor_test.npz" in final_test_names
+    assert "src/elc_rl/simulation_kernel.py" in final_test_names
     assert "scripts/train_sac.py" not in final_test_names
