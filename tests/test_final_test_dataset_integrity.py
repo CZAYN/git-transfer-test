@@ -13,6 +13,7 @@ from elc_rl.physics_motor_model import (
 from elc_rl.physics_test_dataset import (
     FINAL_TEST_ENSEMBLE_RELATIVE_PATH,
     FINAL_TEST_MANIFEST_RELATIVE_PATH,
+    _dependency_sha256,
     build_physics_test_ensemble,
     construct_physics_test_ensemble,
     load_final_test_spec,
@@ -25,6 +26,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_dependency_hash_ignores_git_line_ending_normalization(tmp_path):
+    dependency = tmp_path / "manifest.json"
+    dependency.write_bytes(b'{\r\n  "schema_version": 1\r\n}\r\n')
+    windows_hash = _dependency_sha256(dependency)
+    dependency.write_bytes(b'{\n  "schema_version": 1\n}\n')
+    assert _dependency_sha256(dependency) == windows_hash
 
 
 def test_final_test_split_is_sealed_and_has_expected_roles():

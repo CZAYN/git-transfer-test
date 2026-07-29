@@ -43,6 +43,15 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _dependency_sha256(path: Path) -> str:
+    """Hash dependencies portably while preserving byte-exact binary checks."""
+
+    content = path.read_bytes()
+    if path.suffix.lower() == ".json":
+        content = content.replace(b"\r\n", b"\n")
+    return hashlib.sha256(content).hexdigest()
+
+
 def _matrix_sha256(values: np.ndarray) -> str:
     array = np.ascontiguousarray(values, dtype=np.float64)
     return hashlib.sha256(array.tobytes()).hexdigest()
@@ -306,8 +315,10 @@ def build_physics_test_ensemble(
         "test_ensemble_path": str(FINAL_TEST_ENSEMBLE_RELATIVE_PATH).replace("\\", "/"),
         "test_ensemble_sha256": _sha256(output),
         "test_spec_path": str(FINAL_TEST_SPEC_RELATIVE_PATH).replace("\\", "/"),
-        "test_spec_sha256": _sha256(root / FINAL_TEST_SPEC_RELATIVE_PATH),
-        "physics_config_sha256": _sha256(
+        "test_spec_sha256": _dependency_sha256(
+            root / FINAL_TEST_SPEC_RELATIVE_PATH
+        ),
+        "physics_config_sha256": _dependency_sha256(
             root / "config" / "motor_physics.json"
         ),
         "frozen_training_validation_ensemble_path": str(
@@ -316,7 +327,7 @@ def build_physics_test_ensemble(
         "frozen_training_validation_ensemble_sha256": _sha256(
             root / SOURCE_ENSEMBLE_RELATIVE_PATH
         ),
-        "frozen_training_validation_manifest_sha256": _sha256(
+        "frozen_training_validation_manifest_sha256": _dependency_sha256(
             root / SOURCE_MANIFEST_RELATIVE_PATH
         ),
         "frozen_training_parameter_matrix_sha256": _matrix_sha256(
@@ -354,8 +365,8 @@ def build_physics_test_ensemble(
     return manifest
 
 
-def load_physics_test_ensemble(project_root: Path) -> dict[str, np.ndarray]:
-    """Load the sealed test set and verify source/config hashes have not changed."""
+def verify_physics_test_dependencies(project_root: Path) -> dict[str, Any]:
+    """Verify sealed dependencies without opening or evaluating the test ensemble."""
 
     root = Path(project_root).resolve()
     output = root / FINAL_TEST_ENSEMBLE_RELATIVE_PATH
@@ -375,9 +386,21 @@ def load_physics_test_ensemble(project_root: Path) -> dict[str, np.ndarray]:
         ],
     }
     for path, expected in checks.items():
-        actual = _sha256(path)
+        actual = _dependency_sha256(path)
         if actual != expected:
-            raise ValueError(f"sealed final-test dependency changed: {path.name}")
+            raise ValueError(
+                "sealed final-test dependency changed: "
+                f"{path.name} expected={expected} actual={actual}"
+            )
+    return manifest
+
+
+def load_physics_test_ensemble(project_root: Path) -> dict[str, np.ndarray]:
+    """Load the sealed test set after verifying source/config hashes."""
+
+    root = Path(project_root).resolve()
+    output = root / FINAL_TEST_ENSEMBLE_RELATIVE_PATH
+    manifest = verify_physics_test_dependencies(root)
     with np.load(output, allow_pickle=False) as archive:
         ensemble = {name: archive[name] for name in archive.files}
     source = load_physics_motor_ensemble(root)

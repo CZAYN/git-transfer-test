@@ -10,7 +10,7 @@
   "physics_config_sha256": "d0bec2fe98bcd677d8cea7684d3a927e0ed595ee98f0f95b0c4e82cfd09d64fa",
   "frozen_training_validation_ensemble_path": "data/processed/physics_motor_ensemble.npz",
   "frozen_training_validation_ensemble_sha256": "86e25d4de9bc1100e494ae38016da5088e57dd2e5313476155da0d0525cbe1f9",
-  "frozen_training_validation_manifest_sha256": "253335a4d7721ec67c309699680064896156c6ced742e97405ae5ed7f0a4ceb8",
+  "frozen_training_validation_manifest_sha256": "f8b1fa1704a6d30f7a1202d5ca0d7660747ada4924e0073190a47d0eb00a9f46",
   "frozen_training_parameter_matrix_sha256": "174348040b1533777a9442b37da50ddde04d5bfb383d54d0b8e736f9d6cb4158",
   "frozen_validation_parameter_matrix_sha256": "228dafec47c2aadd79f1bbf2c0aef20a88ecef2580e4204fbd6cb80f425f6480",
   "test_parameter_matrix_sha256": "ee0a4f78717515cb9bf7d2cf0960d802b0fe167433b3206f60d663846439410b",

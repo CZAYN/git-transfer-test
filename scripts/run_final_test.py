@@ -15,8 +15,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from elc_rl.final_test_evaluator import evaluate_locked_final_candidate  # noqa: E402
 from elc_rl.physics_test_dataset import (  # noqa: E402
-    FINAL_TEST_MANIFEST_RELATIVE_PATH,
     load_final_test_spec,
+    verify_physics_test_dependencies,
 )
 
 
@@ -36,9 +36,7 @@ if __name__ == "__main__":
     candidate_lock_path = arguments.candidate_lock.resolve()
     lock = json.loads(candidate_lock_path.read_text(encoding="utf-8"))
     spec = load_final_test_spec(PROJECT_ROOT)
-    test_manifest = json.loads(
-        (PROJECT_ROOT / FINAL_TEST_MANIFEST_RELATIVE_PATH).read_text(encoding="utf-8")
-    )
+    test_manifest = verify_physics_test_dependencies(PROJECT_ROOT)
     if lock.get("status") != "training_complete_candidate_locked":
         raise ValueError("candidate lock status is invalid")
     if lock.get("test_suite_id") != spec["test_suite_id"]:
