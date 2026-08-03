@@ -15,8 +15,6 @@ FINAL_TEST_PACKAGE_FILES = (
     "config/motor_physics.json",
     "config/final_test_spec.json",
     "data/processed/controller_parameter_space.json",
-    "data/processed/frf_tasks.npz",
-    "data/processed/frf_tasks_manifest.json",
     "data/processed/physics_motor_ensemble.npz",
     "data/processed/physics_motor_ensemble_manifest.json",
     "data/processed/physics_motor_test.npz",
@@ -31,7 +29,6 @@ FINAL_TEST_PACKAGE_FILES = (
     "src/elc_rl/physics_motor_model.py",
     "src/elc_rl/physics_test_dataset.py",
     "src/elc_rl/simulation_kernel.py",
-    "src/elc_rl/task_dataset.py",
 )
 
 

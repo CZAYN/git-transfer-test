@@ -33,6 +33,82 @@ def _isclose_scalar(left: float, right: float) -> bool:
 
 
 @njit(cache=True, nogil=True)
+def lugre_friction_step(
+    mode_code: int,
+    omega_rad_s: float,
+    bristle_state: float,
+    sample_period_s: float,
+    friction_stiffness_nm_per_rad: float,
+    friction_damping_nm_s_per_rad: float,
+    viscous_friction_nm_s_per_rad: float,
+    stribeck_velocity_rad_s: float,
+    coulomb_friction_nm: float,
+    static_friction_nm: float,
+    stribeck_exponent: float,
+) -> tuple[float, float, float]:
+    """Advance one friction interval and return torque, state, and state rate.
+
+    ``mode_code == 0`` is the legacy viscous-only model.  ``mode_code == 1``
+    is the symmetric LuGre model.  For LuGre, velocity is held constant over
+    the interval so the bristle state can be integrated exactly.  The returned
+    rate and torque are evaluated at the updated state; this preserves the
+    standard LuGre output equation without an explicit-Euler state update.
+    """
+
+    if mode_code == 0:
+        return viscous_friction_nm_s_per_rad * omega_rad_s, 0.0, 0.0
+    if mode_code != 1:
+        raise ValueError("friction mode must be 0 (viscous) or 1 (LuGre)")
+    if sample_period_s <= 0.0:
+        raise ValueError("sample period must be positive")
+    if friction_stiffness_nm_per_rad <= 0.0:
+        raise ValueError("LuGre friction stiffness must be positive")
+    if friction_damping_nm_s_per_rad < 0.0:
+        raise ValueError("LuGre friction damping must be non-negative")
+    if viscous_friction_nm_s_per_rad < 0.0:
+        raise ValueError("viscous friction must be non-negative")
+    if stribeck_velocity_rad_s <= 0.0:
+        raise ValueError("Stribeck velocity must be positive")
+    if coulomb_friction_nm <= 0.0:
+        raise ValueError("Coulomb friction must be positive")
+    if static_friction_nm < coulomb_friction_nm:
+        raise ValueError("static friction must not be below Coulomb friction")
+    if stribeck_exponent <= 0.0:
+        raise ValueError("Stribeck exponent must be positive")
+
+    absolute_speed = abs(omega_rad_s)
+    if absolute_speed == 0.0:
+        friction_torque = (
+            friction_stiffness_nm_per_rad * bristle_state
+        )
+        return friction_torque, bristle_state, 0.0
+
+    velocity_ratio = absolute_speed / stribeck_velocity_rad_s
+    stribeck_torque = coulomb_friction_nm + (
+        static_friction_nm - coulomb_friction_nm
+    ) * math.exp(-(velocity_ratio**stribeck_exponent))
+    state_decay_rate = (
+        friction_stiffness_nm_per_rad * absolute_speed / stribeck_torque
+    )
+    speed_sign = 1.0 if omega_rad_s > 0.0 else -1.0
+    steady_bristle_state = (
+        speed_sign * stribeck_torque / friction_stiffness_nm_per_rad
+    )
+    next_bristle_state = steady_bristle_state + (
+        bristle_state - steady_bristle_state
+    ) * math.exp(-state_decay_rate * sample_period_s)
+    bristle_rate = (
+        omega_rad_s - state_decay_rate * next_bristle_state
+    )
+    friction_torque = (
+        friction_stiffness_nm_per_rad * next_bristle_state
+        + friction_damping_nm_s_per_rad * bristle_rate
+        + viscous_friction_nm_s_per_rad * omega_rad_s
+    )
+    return friction_torque, next_bristle_state, bristle_rate
+
+
+@njit(cache=True, nogil=True)
 def _pid_update(
     error: float,
     kp: float,
@@ -72,12 +148,16 @@ def simulate_scenario_kernel(
     controller_parameters: np.ndarray,
     derivative_filters_s: np.ndarray,
     motor_parameters: np.ndarray,
+    friction_settings: np.ndarray,
     nominal_inverse_parameters: np.ndarray,
     limits: np.ndarray,
     scenario_values: np.ndarray,
     encoder_lsb: float,
     encoder_noise: np.ndarray,
 ) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
     np.ndarray,
     np.ndarray,
     np.ndarray,
@@ -106,6 +186,9 @@ def simulate_scenario_kernel(
     current_reference = np.zeros(point_count, dtype=np.float64)
     speed_reference = np.zeros(point_count, dtype=np.float64)
     load_torque = np.zeros(point_count, dtype=np.float64)
+    friction_torque = np.zeros(point_count, dtype=np.float64)
+    bristle_state_trace = np.zeros(point_count, dtype=np.float64)
+    bristle_rate = np.zeros(point_count, dtype=np.float64)
 
     position_kp = controller_parameters[0]
     position_ki = controller_parameters[1]
@@ -127,6 +210,21 @@ def simulate_scenario_kernel(
     inertia_kg_m2 = motor_parameters[8]
     torque_constant_nm_per_a = motor_parameters[9]
     position_measurement_delay_s = motor_parameters[10]
+
+    friction_mode = int(friction_settings[0])
+    stribeck_exponent = friction_settings[1]
+    initial_bristle_state = friction_settings[2]
+    friction_stiffness_nm_per_rad = 0.0
+    friction_damping_nm_s_per_rad = 0.0
+    stribeck_velocity_rad_s = 1.0
+    coulomb_friction_nm = 1.0
+    static_friction_nm = 1.0
+    if friction_mode == 1:
+        friction_stiffness_nm_per_rad = motor_parameters[3]
+        friction_damping_nm_s_per_rad = motor_parameters[4]
+        stribeck_velocity_rad_s = motor_parameters[6]
+        coulomb_friction_nm = motor_parameters[11]
+        static_friction_nm = motor_parameters[12]
 
     nominal_viscous_friction = nominal_inverse_parameters[5]
     nominal_inertia = nominal_inverse_parameters[8]
@@ -162,6 +260,7 @@ def simulate_scenario_kernel(
     previous_theta_observed = 0.0
     previous_omega_feedback = 0.0
     estimated_load = 0.0
+    bristle_state = initial_bristle_state if friction_mode == 1 else 0.0
     saturation_count = 0
     terminated = False
 
@@ -303,9 +402,26 @@ def simulate_scenario_kernel(
             and now >= disturbance_start
         ):
             active_load = load_torque_step
+        (
+            active_friction_torque,
+            bristle_state,
+            active_bristle_rate,
+        ) = lugre_friction_step(
+            friction_mode,
+            omega,
+            bristle_state,
+            dt,
+            friction_stiffness_nm_per_rad,
+            friction_damping_nm_s_per_rad,
+            viscous_friction_nm_s_per_rad,
+            stribeck_velocity_rad_s,
+            coulomb_friction_nm,
+            static_friction_nm,
+            stribeck_exponent,
+        )
         domega_dt = (
             torque_constant_nm_per_a * i_a
-            - viscous_friction_nm_s_per_rad * omega
+            - active_friction_torque
             - active_load
         ) / inertia_kg_m2
         omega += dt * domega_dt
@@ -317,6 +433,9 @@ def simulate_scenario_kernel(
         current_reference[index] = iq_reference
         speed_reference[index] = speed_command
         load_torque[index] = active_load
+        friction_torque[index] = active_friction_torque
+        bristle_state_trace[index] = bristle_state
+        bristle_rate[index] = active_bristle_rate
         voltage[index] = voltage_command
 
         if scenario_code == SCENARIO_CURRENT:
@@ -336,6 +455,9 @@ def simulate_scenario_kernel(
             or not math.isfinite(omega)
             or not math.isfinite(theta)
             or not math.isfinite(applied_voltage)
+            or not math.isfinite(active_friction_torque)
+            or not math.isfinite(bristle_state)
+            or not math.isfinite(active_bristle_rate)
         ):
             terminated = True
             if index + 1 < point_count:
@@ -350,6 +472,11 @@ def simulate_scenario_kernel(
                     current_reference[fill_index] = current_reference[index]
                     speed_reference[fill_index] = speed_reference[index]
                     load_torque[fill_index] = load_torque[index]
+                    friction_torque[fill_index] = friction_torque[index]
+                    bristle_state_trace[fill_index] = (
+                        bristle_state_trace[index]
+                    )
+                    bristle_rate[fill_index] = bristle_rate[index]
             break
 
     return (
@@ -364,6 +491,9 @@ def simulate_scenario_kernel(
         current_reference,
         speed_reference,
         load_torque,
+        friction_torque,
+        bristle_state_trace,
+        bristle_rate,
         saturation_count,
         terminated,
     )

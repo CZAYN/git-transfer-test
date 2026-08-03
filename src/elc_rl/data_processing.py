@@ -383,7 +383,18 @@ def build_processed_data(project_root: Path) -> dict[str, Any]:
     task_manifest = {
         "schema_version": 1,
         "task_id": TASK_ID,
-        "description": "Static three-loop FRF context for controller tuning tasks.",
+        "description": (
+            "Offline measured three-loop FRF artifact for model-mismatch "
+            "diagnostics; excluded from SAC training."
+        ),
+        "data_role": "offline_model_mismatch_diagnostic_only",
+        "training_policy": {
+            "included_in_observation": False,
+            "included_in_reward": False,
+            "included_in_replay_buffer": False,
+            "included_in_candidate_selection": False,
+            "included_in_server_packages": False,
+        },
         "arrays": {
             key: {"shape": list(value.shape), "dtype": str(value.dtype)}
             for key, value in task_arrays.items()
@@ -416,7 +427,11 @@ def build_processed_data(project_root: Path) -> dict[str, Any]:
             "frf_tasks_sha256": _sha256(task_path),
         },
         "limitations": [
-            "This file contains static plant context, not RL transitions or optimal controller labels.",
+            (
+                "The retained 705-element context_vector is a legacy/offline "
+                "representation and is not loaded by PIDTuningEnv."
+            ),
+            "This file contains measured diagnostics, not RL transitions or optimal controller labels.",
             "Position FRF is retained as an independent measured channel; no speed/s topology is assumed.",
             "Speed amplitude roles are provisional experiment roles and remain explicit in the task.",
         ],
@@ -496,4 +511,3 @@ if __name__ == "__main__":
     root = Path(__file__).resolve().parents[2]
     result = build_processed_data(root)
     print(json.dumps(result["counts"], ensure_ascii=False))
-

@@ -1,4 +1,4 @@
-"""Typed loader and validation for FRF-conditioned tuning tasks."""
+"""Typed loader for measured FRF artifacts used by offline diagnostics only."""
 
 from __future__ import annotations
 

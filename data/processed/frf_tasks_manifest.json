@@ -1,7 +1,15 @@
 {
   "schema_version": 1,
   "task_id": "cgs_turntable_001",
-  "description": "Static three-loop FRF context for controller tuning tasks.",
+  "description": "Offline measured three-loop FRF artifact for model-mismatch diagnostics; excluded from SAC training.",
+  "data_role": "offline_model_mismatch_diagnostic_only",
+  "training_policy": {
+    "included_in_observation": false,
+    "included_in_reward": false,
+    "included_in_replay_buffer": false,
+    "included_in_candidate_selection": false,
+    "included_in_server_packages": false
+  },
   "arrays": {
     "schema_version": {
       "shape": [],
@@ -140,7 +148,8 @@
     "frf_tasks_sha256": "9a5886b57cccf560cb4c30de2027033f775368f692df1d596ed9b70b03065ef7"
   },
   "limitations": [
-    "This file contains static plant context, not RL transitions or optimal controller labels.",
+    "The retained 705-element context_vector is a legacy/offline representation and is not loaded by PIDTuningEnv.",
+    "This file contains measured diagnostics, not RL transitions or optimal controller labels.",
     "Position FRF is retained as an independent measured channel; no speed/s topology is assumed.",
     "Speed amplitude roles are provisional experiment roles and remain explicit in the task."
   ]

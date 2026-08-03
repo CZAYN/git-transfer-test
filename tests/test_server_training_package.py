@@ -42,3 +42,5 @@ def test_server_package_is_reproducible_and_excludes_sealed_artifacts(tmp_path):
     assert embedded["entry_count"] == len(names) - 1
     assert not any("physics_motor_test" in name for name in names)
     assert not any("final_test" in name for name in names)
+    assert not any("frf_tasks" in name for name in names)
+    assert "src/elc_rl/task_dataset.py" not in names

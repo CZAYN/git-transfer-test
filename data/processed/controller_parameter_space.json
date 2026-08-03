@@ -26,7 +26,7 @@
   "physics_model": {
     "model_id": "mentor_motor_physics",
     "config_relative_path": "config/motor_physics.json",
-    "config_sha256": "d0bec2fe98bcd677d8cea7684d3a927e0ed595ee98f0f95b0c4e82cfd09d64fa",
+    "config_sha256": "9d0528f6ca6c534ec1527fccd486fd26f4c49e28de01bdaf10775681700ff9a7",
     "primary_training_plant": true,
     "measured_frf_used_as_training_plant": false
   },

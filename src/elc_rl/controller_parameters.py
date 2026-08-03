@@ -11,9 +11,9 @@ from typing import Any
 import numpy as np
 
 from .physics_motor_model import load_physics_motor_config
-from .task_dataset import EXPECTED_TASK_ID, load_frf_task
 
 
+PHYSICS_TASK_ID = "cgs_turntable_001"
 PARAMETER_ORDER = (
     "kppos",
     "kipos",
@@ -90,7 +90,7 @@ class ControllerParameterSpace:
         )
 
     def validate(self) -> None:
-        if self.task_id != EXPECTED_TASK_ID:
+        if self.task_id != PHYSICS_TASK_ID:
             raise ValueError(f"unexpected task_id: {self.task_id}")
         if self.names != PARAMETER_ORDER:
             raise ValueError(f"unexpected parameter order: {self.names}")
@@ -323,7 +323,6 @@ def build_physics_controller_parameter_space(project_root: Path) -> dict[str, An
 
     root = Path(project_root).resolve()
     config = load_physics_motor_config(root)
-    task = load_frf_task(root)
     initial = derive_physics_controller_initials(root)
     by_name = dict(zip(PARAMETER_ORDER, initial.tolist()))
     dt = config.sample_period_s
@@ -413,7 +412,7 @@ def build_physics_controller_parameter_space(project_root: Path) -> dict[str, An
     payload: dict[str, Any] = {
         "schema_version": 2,
         "profile": "physics",
-        "task_id": task.task_id,
+        "task_id": PHYSICS_TASK_ID,
         "parameter_order": list(PARAMETER_ORDER),
         "controller_convention": (
             "continuous filtered PIDF: C(s)=Kp+Ki/s+Kd*s/(Tf*s+1); "
@@ -483,7 +482,7 @@ def build_physics_controller_parameter_space(project_root: Path) -> dict[str, An
         output_dir / PHYSICS_PARAMETER_SPACE_NPZ,
         schema_version=np.asarray(2, dtype=np.int16),
         profile=np.asarray("physics"),
-        task_id=np.asarray(task.task_id),
+        task_id=np.asarray(PHYSICS_TASK_ID),
         parameter_names=np.asarray(space.names),
         initial=space.initial,
         lower=space.lower,

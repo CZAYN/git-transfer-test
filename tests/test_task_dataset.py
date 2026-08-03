@@ -54,7 +54,14 @@ def test_task_retains_and_masks_suspicious_speed_point():
 def test_task_manifest_has_no_rl_labels():
     task = load_frf_task(PROJECT_ROOT)
     text = str(task.manifest).lower()
-    assert "static three-loop frf context" in task.manifest["description"].lower()
+    assert task.manifest["data_role"] == "offline_model_mismatch_diagnostic_only"
+    assert task.manifest["training_policy"] == {
+        "included_in_observation": False,
+        "included_in_reward": False,
+        "included_in_replay_buffer": False,
+        "included_in_candidate_selection": False,
+        "included_in_server_packages": False,
+    }
     assert task.manifest["context_vector"]["slices"]["position_frf"] == [630, 705]
     assert "reward" not in task.manifest["arrays"]
     assert "transition" not in task.manifest["arrays"]

@@ -39,8 +39,6 @@ from .tuning_env import PIDTuningEnv, STAGE_ORDER, combined_stage_cost
 TRAINING_INPUT_RELATIVE_PATHS = (
     "config/motor_physics.json",
     "data/processed/controller_parameter_space.json",
-    "data/processed/frf_tasks.npz",
-    "data/processed/frf_tasks_manifest.json",
     "data/processed/physics_motor_ensemble.npz",
     "data/processed/physics_motor_ensemble_manifest.json",
     "src/elc_rl/__init__.py",
@@ -51,7 +49,6 @@ TRAINING_INPUT_RELATIVE_PATHS = (
     "src/elc_rl/physics_motor_model.py",
     "src/elc_rl/simulation_kernel.py",
     "src/elc_rl/sac_training.py",
-    "src/elc_rl/task_dataset.py",
     "src/elc_rl/tuning_env.py",
     "scripts/train_sac.py",
 )
@@ -1793,6 +1790,10 @@ def select_multi_seed_candidate(
     output.mkdir(parents=True, exist_ok=True)
     evaluator = get_physics_controller_evaluator(root)
     time_evaluator = get_physics_time_domain_evaluator(root)
+    expected_input_fingerprint = build_training_input_manifest(
+        root,
+        load_formal_training_config(root),
+    )["fingerprint"]
     position_target_hz = float(
         evaluator.space.metadata["position_design"]["target_crossover_hz"]
     )
@@ -1817,6 +1818,10 @@ def select_multi_seed_candidate(
         if not complete or not eligible:
             raise ValueError(
                 f"candidate is not eligible for formal selection: {path}"
+            )
+        if fingerprint != expected_input_fingerprint:
+            raise ValueError(
+                f"candidate training input fingerprint does not match current protocol: {path}"
             )
         frequency = evaluator.audit(parameters)
         time_domain = time_evaluator.full_audit(parameters)

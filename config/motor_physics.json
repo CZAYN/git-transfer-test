@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "model_id": "mentor_motor_physics",
   "description": "Single-axis FOC-decoupled servo model supplied by the mentor; all values use SI units.",
   "sample_period_s": 0.0002,
@@ -14,7 +14,9 @@
     "speed_measurement_delay_s": 0.0002,
     "inertia_kg_m2": 0.00221,
     "torque_constant_nm_per_a": 0.1633,
-    "position_measurement_delay_s": 0.0002
+    "position_measurement_delay_s": 0.0002,
+    "coulomb_friction_nm": 0.015,
+    "static_friction_nm": 0.02
   },
   "uncertainty_fraction": {
     "inductance_h": 0.05,
@@ -27,7 +29,9 @@
     "speed_measurement_delay_s": 0.1,
     "inertia_kg_m2": 0.1,
     "torque_constant_nm_per_a": 0.05,
-    "position_measurement_delay_s": 0.1
+    "position_measurement_delay_s": 0.1,
+    "coulomb_friction_nm": 0.1,
+    "static_friction_nm": 0.1
   },
   "ensemble": {
     "seed": 20260722,
@@ -94,13 +98,21 @@
     "disturbance_start_s": 0.15
   },
   "friction_model": {
-    "active": "viscous_B_only",
-    "stored_but_inactive": [
-      "friction_stiffness_nm_per_rad",
-      "friction_damping_nm_s_per_rad",
-      "stribeck_velocity_rad_s"
-    ],
-    "reason": "A complete LuGre law also needs Coulomb/static friction levels and an explicit sign convention; these were not supplied and are not fabricated."
+    "active": "lugre",
+    "stribeck_exponent": 2.0,
+    "initial_bristle_state_rad": 0.0,
+    "torque_sign_convention": "tau_f_has_velocity_sign_and_is_subtracted_in_J_omega_dot=Kt_iq-tau_f-tau_load",
+    "parameter_status": {
+      "friction_stiffness_nm_per_rad": "mentor_supplied_provisional_active",
+      "friction_damping_nm_s_per_rad": "mentor_supplied_provisional_active_high_risk",
+      "viscous_friction_nm_s_per_rad": "mentor_supplied_provisional_active",
+      "stribeck_velocity_rad_s": "mentor_supplied_provisional_active",
+      "coulomb_friction_nm": "user_authorized_provisional_simulation_assumption_2026-08-03",
+      "static_friction_nm": "user_authorized_provisional_simulation_assumption_2026-08-03"
+    },
+    "stored_but_inactive": [],
+    "activation_scope": "simulation_startup_and_training_validation_only_not_hardware_claim",
+    "reason": "LuGre is enabled with user-authorized provisional simulation assumptions Fc=0.015 N*m and Fs=0.020 N*m. These values, sigma0, sigma1 and stribeck velocity remain unverified by motor experiments; sigma1 is explicitly high risk and all parameters must be replaced or confirmed by identification data before hardware use."
   },
   "provenance": {
     "inductance_correction": "User confirmed L=0.002707 H (2.707 mH).",
@@ -109,6 +121,7 @@
       "Gmechanical(s)=Kt/(J*s+B)",
       "Pposition(s)=1/s cascaded with the closed speed loop"
     ],
-    "measured_frf_role": "held-out calibration and model-mismatch evidence; not the primary training plant"
+    "measured_frf_role": "held-out calibration and model-mismatch evidence; not the primary training plant",
+    "lugre_provisional_activation": "User authorized provisional simulation values Fc=0.015 N*m and Fs=0.020 N*m on 2026-08-03 so the complete LuGre path can be exercised before hardware identification."
   }
 }

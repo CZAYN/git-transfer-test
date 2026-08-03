@@ -42,6 +42,8 @@ def test_final_test_split_is_sealed_and_has_expected_roles():
         (PROJECT_ROOT / FINAL_TEST_MANIFEST_RELATIVE_PATH).read_text(encoding="utf-8")
     )
     assert ensemble["parameters"].shape == (24, len(MODEL_PARAMETER_NAMES))
+    assert int(ensemble["schema_version"]) == 2
+    assert manifest["schema_version"] == 2
     assert np.count_nonzero(ensemble["test_group"] == "in_distribution") == 16
     assert np.count_nonzero(ensemble["test_group"] == "ood") == 8
     assert np.all(ensemble["final_test_only"] == 1)
@@ -81,8 +83,13 @@ def test_in_distribution_models_use_only_declared_training_uncertainty():
     uncertainty = np.asarray(
         [config.uncertainty_fraction[name] for name in MODEL_PARAMETER_NAMES]
     )
-    relative = np.abs(values / nominal[None, :] - 1.0)
-    assert np.all(relative <= uncertainty[None, :] + 1e-12)
+    active = nominal > 0.0
+    relative = np.zeros_like(values)
+    relative[:, active] = np.abs(
+        values[:, active] / nominal[None, active] - 1.0
+    )
+    assert np.all(relative[:, active] <= uncertainty[None, active] + 1e-12)
+    assert np.all(values[:, ~active] == 0.0)
     assert not np.any(
         np.all(np.isclose(values, nominal[None, :], rtol=0.0, atol=1e-14), axis=1)
     )
@@ -96,7 +103,11 @@ def test_every_ood_model_exits_the_training_uncertainty_box():
     uncertainty = np.asarray(
         [config.uncertainty_fraction[name] for name in MODEL_PARAMETER_NAMES]
     )
-    normalized = np.abs((values / nominal[None, :] - 1.0) / uncertainty[None, :])
+    scale = nominal * uncertainty
+    active = scale > 0.0
+    normalized = np.abs(
+        (values[:, active] - nominal[None, active]) / scale[None, active]
+    )
     assert np.all(np.any(normalized > 1.0 + 1e-12, axis=1))
 
 

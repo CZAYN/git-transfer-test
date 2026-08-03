@@ -25,11 +25,20 @@ from .physics_motor_model import (
     load_physics_motor_ensemble,
     simulate_scenario,
 )
-from .task_dataset import FRFTask, load_frf_task
 
 
 PHYSICS_FREQUENCY_POINTS = 1024
 PHYSICS_TRAIN_FREQUENCY_POINTS = 320
+PHYSICS_OBSERVATION_FREQUENCY_POINTS_PER_LOOP = 16
+PHYSICS_OBSERVATION_CROSSOVER_RATIOS = (0.1, 10.0)
+PHYSICS_FRICTION_CONTEXT_PARAMETER_NAMES = (
+    "friction_stiffness_nm_per_rad",
+    "friction_damping_nm_s_per_rad",
+    "viscous_friction_nm_s_per_rad",
+    "coulomb_friction_nm",
+    "static_friction_nm",
+    "stribeck_velocity_rad_s",
+)
 PHYSICS_FREQUENCY_LIMITS_HZ = {
     "current": (0.2, 2250.0),
     "speed": (0.02, 800.0),
@@ -414,16 +423,26 @@ class PhysicsControllerEvaluator:
     def motor(self, index: int) -> MotorParameters:
         return MotorParameters.from_array(self.ensemble["parameters"][int(index)])
 
-    def sampled_frf_vector(self, indices: np.ndarray, task: FRFTask) -> np.ndarray:
+    def sampled_frf_vector(self, indices: np.ndarray) -> np.ndarray:
+        """Encode one sampled physics plant on a model-defined frequency grid."""
+
         values = self.validate_sampled_indices(indices)
         motor = self.motor(int(values[0]))
         systems = physics_loop_transfers(self.config, motor, self.space.initial)
-        speed_amplitude_index = int(np.flatnonzero(task.speed_amplitudes_mA == 100.0)[0])
-        frequencies = {
-            "current": 10.0 ** task.current_frf[:, 0],
-            "speed": 10.0 ** task.speed_frf[speed_amplitude_index, :, 0],
-            "position": 10.0 ** task.position_frf[:, 0],
-        }
+        crossover_targets = self.config.target_crossovers_hz
+        lower_ratio, upper_ratio = PHYSICS_OBSERVATION_CROSSOVER_RATIOS
+        frequencies = {}
+        for loop, target_hz in crossover_targets.items():
+            physical_lower_hz, physical_upper_hz = PHYSICS_FREQUENCY_LIMITS_HZ[loop]
+            lower_hz = max(physical_lower_hz, lower_ratio * target_hz)
+            upper_hz = min(physical_upper_hz, upper_ratio * target_hz)
+            if not 0.0 < lower_hz < upper_hz:
+                raise ValueError(f"invalid physics observation frequency grid for {loop}")
+            frequencies[loop] = np.geomspace(
+                lower_hz,
+                upper_hz,
+                PHYSICS_OBSERVATION_FREQUENCY_POINTS_PER_LOOP,
+            )
         plant_names = {
             "current": "electrical_plant",
             "speed": "speed_measurement_plant",
@@ -443,6 +462,42 @@ class PhysicsControllerEvaluator:
         if vector.shape != (96,) or not np.isfinite(vector).all():
             raise ValueError("physics sampled FRF vector is invalid")
         return vector
+
+    def friction_context_vector(self, indices: np.ndarray) -> np.ndarray:
+        """Encode the sampled model's LuGre uncertainty for the SAC policy.
+
+        The active model is represented as a centered fraction of each declared
+        uncertainty interval, so every randomized component normally lies in
+        ``[-1, 1]``.  A deliberately selected viscous-only compatibility
+        configuration returns zeros because its stored LuGre values do not
+        participate in episode dynamics.
+        """
+
+        values = self.validate_sampled_indices(indices)
+        if self.config.active_friction_model != "lugre":
+            return np.zeros(
+                len(PHYSICS_FRICTION_CONTEXT_PARAMETER_NAMES), dtype=np.float64
+            )
+
+        motor = self.motor(int(values[0]))
+        context: list[float] = []
+        for name in PHYSICS_FRICTION_CONTEXT_PARAMETER_NAMES:
+            nominal = float(getattr(self.config.nominal, name))
+            value = float(getattr(motor, name))
+            uncertainty = float(self.config.uncertainty_fraction[name])
+            if nominal <= 0.0:
+                raise ValueError(f"active LuGre context has invalid nominal {name}")
+            normalized = 0.0
+            if uncertainty > 0.0:
+                normalized = (value / nominal - 1.0) / uncertainty
+            context.append(normalized)
+        vector = np.asarray(context, dtype=np.float64)
+        if (
+            vector.shape != (len(PHYSICS_FRICTION_CONTEXT_PARAMETER_NAMES),)
+            or not np.isfinite(vector).all()
+        ):
+            raise ValueError("physics friction context is invalid")
+        return np.clip(vector, -5.0, 5.0)
 
     def _evaluate(
         self,
@@ -666,6 +721,18 @@ class PhysicsTimeDomainEvaluator:
             "voltage_peak_v": float(np.max(np.abs(trace.voltage_v))),
             "current_peak_a": float(np.max(np.abs(trace.current_a))),
             "speed_peak_rad_s": float(np.max(np.abs(trace.speed_rad_s))),
+            "friction_torque_peak_nm": float(
+                np.max(np.abs(trace.friction_torque_nm))
+            ),
+            "friction_torque_rms_nm": float(
+                np.sqrt(np.mean(trace.friction_torque_nm**2))
+            ),
+            "bristle_state_peak_rad": float(
+                np.max(np.abs(trace.bristle_state_rad))
+            ),
+            "bristle_rate_peak_rad_s": float(
+                np.max(np.abs(trace.bristle_rate_rad_s))
+            ),
             "voltage_limit_ratio": float(
                 np.max(np.abs(trace.voltage_v)) / float(limits["voltage_v"])
             ),
@@ -761,6 +828,18 @@ class PhysicsTimeDomainEvaluator:
             "voltage_limit_ratio_worst": float(np.max(values("voltage_limit_ratio"))),
             "current_limit_ratio_worst": float(np.max(values("current_limit_ratio"))),
             "speed_limit_ratio_worst": float(np.max(values("speed_limit_ratio"))),
+            "friction_torque_peak_nm_worst": float(
+                np.max(values("friction_torque_peak_nm"))
+            ),
+            "friction_torque_rms_nm_worst": float(
+                np.max(values("friction_torque_rms_nm"))
+            ),
+            "bristle_state_peak_rad_worst": float(
+                np.max(values("bristle_state_peak_rad"))
+            ),
+            "bristle_rate_peak_rad_s_worst": float(
+                np.max(values("bristle_rate_peak_rad_s"))
+            ),
             "saturation_count_worst": int(np.max(values("saturation_count"))),
         }
         if "disturbance_peak" in rows[0]:
@@ -933,6 +1012,8 @@ def build_physics_baseline_evaluation(project_root: Path) -> dict[str, Any]:
 
 def compare_physics_to_measured_frf(project_root: Path) -> dict[str, Any]:
     """Report model mismatch without fitting physics parameters to the FRF data."""
+
+    from .task_dataset import load_frf_task
 
     root = Path(project_root).resolve()
     evaluator = get_physics_controller_evaluator(root)

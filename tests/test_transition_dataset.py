@@ -3,9 +3,11 @@ from pathlib import Path
 import numpy as np
 
 from elc_rl.transition_dataset import (
+    TRANSITION_SCHEMA_VERSION,
     generate_transition_dataset,
     validate_transition_archive,
 )
+from elc_rl.tuning_env import OBSERVATION_KEYS
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -31,7 +33,11 @@ def test_small_transition_archive_is_aligned_and_reproducible(tmp_path):
     assert first_manifest["transition_count"] == 2
     assert first.read_bytes() == second.read_bytes()
     validation = validate_transition_archive(first)
+    assert validation["observation_keys"] == sorted(OBSERVATION_KEYS)
     assert validation["stage_counts"]["current"] == 2
     with np.load(first, allow_pickle=False) as data:
+        assert int(data["schema_version"]) == TRANSITION_SCHEMA_VERSION
+        assert "observation__frf_context" not in data.files
+        assert data["observation__friction_context"].shape == (2, 6)
         assert data["observation__time_metrics"].shape[0] == 2
         assert np.all(data["action"][:, 3:8] == 0.0)

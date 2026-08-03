@@ -39,6 +39,19 @@ MODEL_PARAMETER_NAMES = (
     "inertia_kg_m2",
     "torque_constant_nm_per_a",
     "position_measurement_delay_s",
+    "coulomb_friction_nm",
+    "static_friction_nm",
+)
+
+LUGRE_FRICTION_LEVEL_NAMES = (
+    "coulomb_friction_nm",
+    "static_friction_nm",
+)
+SUPPORTED_FRICTION_MODELS = {"viscous_B_only", "lugre"}
+UNIDENTIFIED_FRICTION_STATUS = "unidentified_disabled_zero_sentinel"
+FRICTION_TORQUE_SIGN_CONVENTION = (
+    "tau_f_has_velocity_sign_and_is_subtracted_in_"
+    "J_omega_dot=Kt_iq-tau_f-tau_load"
 )
 
 PHYSICS_CONFIG_RELATIVE_PATH = Path("config") / "motor_physics.json"
@@ -73,6 +86,8 @@ class MotorParameters:
     inertia_kg_m2: float
     torque_constant_nm_per_a: float
     position_measurement_delay_s: float
+    coulomb_friction_nm: float
+    static_friction_nm: float
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, Any]) -> "MotorParameters":
@@ -90,10 +105,26 @@ class MotorParameters:
             [getattr(self, name) for name in MODEL_PARAMETER_NAMES], dtype=np.float64
         )
 
-    def validate(self) -> None:
+    def validate(self, *, friction_model: str = "viscous_B_only") -> None:
         values = self.as_array()
-        if not np.isfinite(values).all() or np.any(values <= 0.0):
-            raise ValueError("all physics motor parameters must be finite and positive")
+        if friction_model not in SUPPORTED_FRICTION_MODELS:
+            raise ValueError(f"unsupported friction model: {friction_model}")
+        if not np.isfinite(values).all():
+            raise ValueError("all physics motor parameters must be finite")
+        if np.any(values[: -len(LUGRE_FRICTION_LEVEL_NAMES)] <= 0.0):
+            raise ValueError("non-LuGre-level physics motor parameters must be positive")
+        if self.coulomb_friction_nm < 0.0 or self.static_friction_nm < 0.0:
+            raise ValueError("LuGre friction levels must be non-negative")
+        if self.static_friction_nm < self.coulomb_friction_nm:
+            raise ValueError(
+                "static_friction_nm must be greater than or equal to "
+                "coulomb_friction_nm"
+            )
+        if friction_model == "lugre" and self.coulomb_friction_nm <= 0.0:
+            raise ValueError(
+                "active LuGre friction requires static_friction_nm >= "
+                "coulomb_friction_nm > 0"
+            )
 
     @property
     def electrical_time_constant_s(self) -> float:
@@ -125,6 +156,14 @@ class PhysicsMotorConfig:
         }
 
     @property
+    def friction_model(self) -> dict[str, Any]:
+        return dict(self.payload["friction_model"])
+
+    @property
+    def active_friction_model(self) -> str:
+        return str(self.payload["friction_model"]["active"])
+
+    @property
     def limits(self) -> dict[str, Any]:
         return dict(self.payload["simulation_limits"])
 
@@ -153,16 +192,64 @@ class PhysicsMotorConfig:
         }
 
     def validate(self) -> None:
-        if int(self.payload["schema_version"]) != 1:
+        if int(self.payload["schema_version"]) != 2:
             raise ValueError("unsupported physics motor configuration schema")
         if self.payload["model_id"] != "mentor_motor_physics":
             raise ValueError("unexpected physics motor model_id")
         if self.sample_period_s <= 0.0:
             raise ValueError("sample_period_s must be positive")
-        self.nominal.validate()
+        friction = self.friction_model
+        active_friction_model = self.active_friction_model
+        if active_friction_model not in SUPPORTED_FRICTION_MODELS:
+            raise ValueError(f"unsupported friction model: {active_friction_model}")
+        exponent = float(friction["stribeck_exponent"])
+        if not np.isfinite(exponent) or exponent <= 0.0:
+            raise ValueError("LuGre Stribeck exponent must be finite and positive")
+        initial_bristle_state = float(friction["initial_bristle_state_rad"])
+        if not np.isfinite(initial_bristle_state):
+            raise ValueError("initial LuGre bristle state must be finite")
+        if friction["torque_sign_convention"] != FRICTION_TORQUE_SIGN_CONVENTION:
+            raise ValueError("unexpected LuGre friction torque sign convention")
+        parameter_status = friction["parameter_status"]
+        for name in LUGRE_FRICTION_LEVEL_NAMES:
+            if name not in parameter_status:
+                raise ValueError(f"missing friction parameter status for {name}")
+        self.nominal.validate(friction_model=active_friction_model)
+        if (
+            active_friction_model == "lugre"
+            and abs(initial_bristle_state)
+            > self.nominal.static_friction_nm
+            / self.nominal.friction_stiffness_nm_per_rad
+        ):
+            raise ValueError(
+                "initial LuGre bristle state exceeds the static-friction bound"
+            )
         for name, fraction in self.uncertainty_fraction.items():
             if not 0.0 <= fraction <= 0.5:
                 raise ValueError(f"invalid uncertainty fraction for {name}")
+        for name in LUGRE_FRICTION_LEVEL_NAMES:
+            value = float(getattr(self.nominal, name))
+            uncertainty = self.uncertainty_fraction[name]
+            if value == 0.0 and uncertainty != 0.0:
+                raise ValueError(
+                    f"zero sentinel {name} must have zero uncertainty"
+                )
+            if (
+                active_friction_model == "lugre"
+                and parameter_status[name] == UNIDENTIFIED_FRICTION_STATUS
+            ):
+                raise ValueError(f"active LuGre parameter is still unidentified: {name}")
+        minimum_static = self.nominal.static_friction_nm * (
+            1.0 - self.uncertainty_fraction["static_friction_nm"]
+        )
+        maximum_coulomb = self.nominal.coulomb_friction_nm * (
+            1.0 + self.uncertainty_fraction["coulomb_friction_nm"]
+        )
+        if minimum_static < maximum_coulomb:
+            raise ValueError(
+                "LuGre uncertainty ranges can violate static_friction_nm >= "
+                "coulomb_friction_nm"
+            )
         targets = self.target_crossovers_hz
         if not targets["current"] > targets["speed"] > targets["position"] > 0.0:
             raise ValueError("controller crossover targets must be strictly nested")
@@ -207,6 +294,20 @@ def clear_physics_motor_config_cache() -> None:
     _cached_config.cache_clear()
 
 
+def _validate_motor_parameter_matrix(
+    parameters: np.ndarray, friction_model: str
+) -> None:
+    """Validate every model row, including LuGre friction-level ordering."""
+
+    values = np.asarray(parameters, dtype=np.float64)
+    if values.ndim != 2 or values.shape[1] != len(MODEL_PARAMETER_NAMES):
+        raise ValueError("physics ensemble matrix has an invalid shape")
+    if not np.isfinite(values).all():
+        raise ValueError("physics ensemble contains non-finite values")
+    for row in values:
+        MotorParameters.from_array(row).validate(friction_model=friction_model)
+
+
 def build_physics_motor_ensemble(project_root: Path) -> dict[str, np.ndarray]:
     """Build a deterministic 40-train/16-validation physical model ensemble."""
 
@@ -231,6 +332,7 @@ def build_physics_motor_ensemble(project_root: Path) -> dict[str, np.ndarray]:
         unit[:, column] = 2.0 * strata - 1.0
     parameters = nominal[None, :] * (1.0 + unit * uncertainty[None, :])
     parameters[0] = nominal
+    _validate_motor_parameter_matrix(parameters, config.active_friction_model)
 
     role = np.asarray(
         ["train"] * training_count + ["validation"] * validation_count
@@ -244,7 +346,7 @@ def build_physics_motor_ensemble(project_root: Path) -> dict[str, np.ndarray]:
         ]
     )
     result = {
-        "schema_version": np.asarray(1, dtype=np.int16),
+        "schema_version": np.asarray(2, dtype=np.int16),
         "parameter_names": np.asarray(MODEL_PARAMETER_NAMES),
         "parameters": parameters,
         "model_id": model_id,
@@ -257,7 +359,7 @@ def build_physics_motor_ensemble(project_root: Path) -> dict[str, np.ndarray]:
     output.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(output, **result)
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "model_id": config.payload["model_id"],
         "config_path": str(PHYSICS_CONFIG_RELATIVE_PATH).replace("\\", "/"),
         "config_sha256": _sha256(config.path),
@@ -291,13 +393,17 @@ def load_physics_motor_ensemble(project_root: Path) -> dict[str, np.ndarray]:
         )
     with np.load(path, allow_pickle=False) as archive:
         ensemble = {name: archive[name] for name in archive.files}
+    if int(np.asarray(ensemble["schema_version"]).item()) != 2:
+        raise ValueError(
+            "unsupported physics ensemble schema; rebuild the 13-parameter ensemble"
+        )
     if tuple(ensemble["parameter_names"].tolist()) != MODEL_PARAMETER_NAMES:
         raise ValueError("physics ensemble parameter order is invalid")
     parameters = np.asarray(ensemble["parameters"], dtype=np.float64)
     if parameters.ndim != 2 or parameters.shape[1] != len(MODEL_PARAMETER_NAMES):
         raise ValueError("physics ensemble matrix has an invalid shape")
-    if not np.isfinite(parameters).all() or np.any(parameters <= 0.0):
-        raise ValueError("physics ensemble contains invalid values")
+    config = load_physics_motor_config(root)
+    _validate_motor_parameter_matrix(parameters, config.active_friction_model)
     if np.count_nonzero(ensemble["is_nominal"]) != 1:
         raise ValueError("physics ensemble must contain exactly one nominal model")
     return ensemble
@@ -317,6 +423,9 @@ class SimulationTrace:
     current_reference_a: np.ndarray
     speed_reference_rad_s: np.ndarray
     load_torque_nm: np.ndarray
+    friction_torque_nm: np.ndarray
+    bristle_state_rad: np.ndarray
+    bristle_rate_rad_s: np.ndarray
     saturation_count: int
     terminated: bool
 
@@ -350,7 +459,7 @@ def simulate_scenario(
 
     if scenario not in {"current", "speed", "position", "disturbance"}:
         raise ValueError(f"unknown simulation scenario: {scenario}")
-    motor.validate()
+    motor.validate(friction_model=config.active_friction_model)
     values = np.asarray(controller_parameters, dtype=np.float64)
     _controller_vector(values)
     dt = config.sample_period_s
@@ -406,6 +515,9 @@ def simulate_scenario(
         current_reference,
         speed_reference,
         load_torque,
+        friction_torque,
+        bristle_state,
+        bristle_rate,
         saturation_count,
         terminated,
     ) = simulate_scenario_kernel(
@@ -418,6 +530,14 @@ def simulate_scenario(
             dtype=np.float64,
         ),
         motor.as_array(),
+        np.asarray(
+            [
+                1.0 if config.active_friction_model == "lugre" else 0.0,
+                float(config.friction_model["stribeck_exponent"]),
+                float(config.friction_model["initial_bristle_state_rad"]),
+            ],
+            dtype=np.float64,
+        ),
         config.nominal.as_array(),
         np.asarray(
             [
@@ -455,6 +575,9 @@ def simulate_scenario(
         current_reference_a=current_reference,
         speed_reference_rad_s=speed_reference,
         load_torque_nm=load_torque,
+        friction_torque_nm=friction_torque,
+        bristle_state_rad=bristle_state,
+        bristle_rate_rad_s=bristle_rate,
         saturation_count=saturation_count,
         terminated=terminated,
     )

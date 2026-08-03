@@ -1,8 +1,8 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "model_id": "mentor_motor_physics",
   "config_path": "config/motor_physics.json",
-  "config_sha256": "d0bec2fe98bcd677d8cea7684d3a927e0ed595ee98f0f95b0c4e82cfd09d64fa",
+  "config_sha256": "9d0528f6ca6c534ec1527fccd486fd26f4c49e28de01bdaf10775681700ff9a7",
   "ensemble_path": "data/processed/physics_motor_ensemble.npz",
   "model_count": 56,
   "training_models": 40,
@@ -19,7 +19,9 @@
     "speed_measurement_delay_s",
     "inertia_kg_m2",
     "torque_constant_nm_per_a",
-    "position_measurement_delay_s"
+    "position_measurement_delay_s",
+    "coulomb_friction_nm",
+    "static_friction_nm"
   ],
   "uncertainty_fraction": {
     "inductance_h": 0.05,
@@ -32,7 +34,9 @@
     "speed_measurement_delay_s": 0.1,
     "inertia_kg_m2": 0.1,
     "torque_constant_nm_per_a": 0.05,
-    "position_measurement_delay_s": 0.1
+    "position_measurement_delay_s": 0.1,
+    "coulomb_friction_nm": 0.1,
+    "static_friction_nm": 0.1
   },
   "nominal_model_included": true,
   "measured_frf_used_for_fitting": false,

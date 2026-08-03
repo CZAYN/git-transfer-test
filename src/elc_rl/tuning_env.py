@@ -14,7 +14,6 @@ from .physics_evaluator import (
     get_physics_controller_evaluator,
     get_physics_time_domain_evaluator,
 )
-from .task_dataset import FRFTask, load_frf_task
 
 
 STAGE_ORDER = ("current", "speed", "position", "dobc", "joint")
@@ -73,23 +72,15 @@ TIME_METRIC_NAMES = tuple(
     "speed_train:disturbance_iae_ratio_to_baseline",
     "speed_train:disturbance_recovery_time_normalized",
 )
-
-
-def _scaled_task_context(task: FRFTask) -> np.ndarray:
-    def scale_base(features: np.ndarray) -> np.ndarray:
-        scaled = np.asarray(features, dtype=np.float64).copy()
-        scaled[..., 0] /= 4.0
-        scaled[..., 1] /= 40.0
-        return scaled
-
-    current = scale_base(task.current_frf)
-    speed = np.asarray(task.speed_frf, dtype=np.float64).copy()
-    speed[..., :5] = scale_base(speed[..., :5])
-    position = scale_base(task.position_frf)
-    context = np.concatenate([current.reshape(-1), speed.reshape(-1), position.reshape(-1)])
-    if context.shape != (705,) or not np.isfinite(context).all():
-        raise ValueError("scaled task context is invalid")
-    return np.clip(context, -5.0, 5.0).astype(np.float32)
+OBSERVATION_KEYS = (
+    "sampled_frf",
+    "friction_context",
+    "parameter_state",
+    "metrics",
+    "time_metrics",
+    "action_mask",
+    "stage",
+)
 
 
 def _metric_vector(report: dict[str, Any], position_target_hz: float) -> np.ndarray:
@@ -338,11 +329,9 @@ class PIDTuningEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
                 raise ValueError("base_parameters must have shape (11,)")
             self.parameter_space.normalize(candidate_base)
             self._base_parameters = candidate_base.copy()
-        self.task = load_frf_task(self.project_root)
         self.position_target_hz = float(
             self.parameter_space.metadata["position_design"]["target_crossover_hz"]
         )
-        self._frf_context = _scaled_task_context(self.task)
         self._action_mask = np.zeros(11, dtype=np.float32)
         self._action_mask[list(STAGE_INDICES[stage])] = 1.0
         self._stage_vector = np.zeros(len(STAGE_ORDER), dtype=np.float32)
@@ -351,11 +340,11 @@ class PIDTuningEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         self.action_space = spaces.Box(-1.0, 1.0, shape=(11,), dtype=np.float32)
         self.observation_space = spaces.Dict(
             {
-                "frf_context": spaces.Box(
-                    -5.0, 5.0, shape=(705,), dtype=np.float32
-                ),
                 "sampled_frf": spaces.Box(
                     -5.0, 5.0, shape=(96,), dtype=np.float32
+                ),
+                "friction_context": spaces.Box(
+                    -5.0, 5.0, shape=(6,), dtype=np.float32
                 ),
                 "parameter_state": spaces.Box(
                     -1.0, 1.0, shape=(11,), dtype=np.float32
@@ -387,6 +376,7 @@ class PIDTuningEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         self._parameters: np.ndarray | None = None
         self._sampled_indices: np.ndarray | None = None
         self._sampled_frf: np.ndarray | None = None
+        self._friction_context: np.ndarray | None = None
         self._report: dict[str, Any] | None = None
         self._time_report: dict[str, Any] | None = None
         self._last_audit_report: dict[str, Any] | None = None
@@ -414,13 +404,14 @@ class PIDTuningEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         if (
             self._parameters is None
             or self._sampled_frf is None
+            or self._friction_context is None
             or self._report is None
             or self._time_report is None
         ):
             raise RuntimeError("environment state is not initialized")
         observation = {
-            "frf_context": self._frf_context.copy(),
             "sampled_frf": self._sampled_frf.copy(),
+            "friction_context": self._friction_context.copy(),
             "parameter_state": self.parameter_space.normalize(self._parameters).astype(
                 np.float32
             ),
@@ -549,8 +540,10 @@ class PIDTuningEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         self._time_report = time_report
         self._last_audit_report = audit
         self._last_time_audit_report = time_audit
-        sampled = self.evaluator.sampled_frf_vector(self._sampled_indices, self.task)
+        sampled = self.evaluator.sampled_frf_vector(self._sampled_indices)
         self._sampled_frf = np.clip(sampled, -5.0, 5.0).astype(np.float32)
+        friction = self.evaluator.friction_context_vector(self._sampled_indices)
+        self._friction_context = np.clip(friction, -5.0, 5.0).astype(np.float32)
         self._previous_stage_cost = combined_stage_cost(
             report, time_report, self.stage, self.position_target_hz
         )
@@ -564,17 +557,19 @@ class PIDTuningEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
             self._parameters is None
             or self._sampled_indices is None
             or self._sampled_frf is None
+            or self._friction_context is None
             or self._report is None
             or self._time_report is None
         ):
             raise RuntimeError("environment must be reset before exporting state")
         return {
-            "schema_version": 1,
+            "schema_version": 3,
             "stage": self.stage,
             "worker_rank": self.worker_rank,
             "parameters": self._parameters.copy(),
             "sampled_indices": self._sampled_indices.copy(),
             "sampled_frf": self._sampled_frf.copy(),
+            "friction_context": self._friction_context.copy(),
             "report": copy.deepcopy(self._report),
             "time_report": copy.deepcopy(self._time_report),
             "last_audit_report": copy.deepcopy(self._last_audit_report),
@@ -594,7 +589,7 @@ class PIDTuningEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
     def restore_state(self, state: dict[str, Any]) -> None:
         """Restore a state produced by :meth:`export_state`."""
 
-        if int(state.get("schema_version", -1)) != 1:
+        if int(state.get("schema_version", -1)) != 3:
             raise ValueError("unsupported environment state schema")
         if state.get("stage") != self.stage:
             raise ValueError("environment state stage mismatch")
@@ -605,12 +600,23 @@ class PIDTuningEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
             np.asarray(state["sampled_indices"], dtype=np.int64)
         )
         sampled_frf = np.asarray(state["sampled_frf"], dtype=np.float32)
-        if parameters.shape != (11,) or sampled_frf.shape != (96,):
+        friction_context = np.asarray(state["friction_context"], dtype=np.float32)
+        if (
+            parameters.shape != (11,)
+            or sampled_frf.shape != (96,)
+            or friction_context.shape != (6,)
+        ):
             raise ValueError("environment state contains invalid arrays")
+        expected_friction_context = self.evaluator.friction_context_vector(
+            sampled_indices
+        ).astype(np.float32)
+        if not np.array_equal(friction_context, expected_friction_context):
+            raise ValueError("environment state friction context mismatch")
         self.parameter_space.normalize(parameters)
         self._parameters = parameters.copy()
         self._sampled_indices = sampled_indices.copy()
         self._sampled_frf = sampled_frf.copy()
+        self._friction_context = friction_context.copy()
         self._report = copy.deepcopy(state["report"])
         self._time_report = copy.deepcopy(state["time_report"])
         self._last_audit_report = copy.deepcopy(state["last_audit_report"])

@@ -88,8 +88,15 @@ def _normalized_chebyshev_distance(
     uncertainty: np.ndarray,
 ) -> np.ndarray:
     scale = nominal * uncertainty
+    active = scale > 0.0
+    if not np.any(active):
+        raise ValueError("test-set distance needs at least one uncertain parameter")
     difference = np.abs(
-        (candidates[:, None, :] - references[None, :, :]) / scale[None, None, :]
+        (
+            candidates[:, None, active]
+            - references[None, :, active]
+        )
+        / scale[None, None, active]
     )
     return np.min(np.max(difference, axis=2), axis=1)
 
@@ -98,8 +105,15 @@ def _minimum_internal_distance(
     candidates: np.ndarray, nominal: np.ndarray, uncertainty: np.ndarray
 ) -> float:
     scale = nominal * uncertainty
+    active = scale > 0.0
+    if not np.any(active):
+        raise ValueError("test-set distance needs at least one uncertain parameter")
     difference = np.abs(
-        (candidates[:, None, :] - candidates[None, :, :]) / scale[None, None, :]
+        (
+            candidates[:, None, active]
+            - candidates[None, :, active]
+        )
+        / scale[None, None, active]
     )
     pairwise = np.max(difference, axis=2)
     np.fill_diagonal(pairwise, np.inf)
@@ -179,7 +193,7 @@ def construct_physics_test_ensemble(project_root: Path) -> dict[str, np.ndarray]
         ["standard"] * id_count + ["ood_stress"] * len(ood_ids)
     )
     result = {
-        "schema_version": np.asarray(1, dtype=np.int16),
+        "schema_version": np.asarray(2, dtype=np.int16),
         "test_suite_id": np.asarray(spec["test_suite_id"]),
         "parameter_names": np.asarray(MODEL_PARAMETER_NAMES),
         "parameters": parameters,
@@ -220,7 +234,7 @@ def validate_physics_test_ensemble(
     missing = required.difference(ensemble)
     if missing:
         raise ValueError(f"final-test ensemble is missing arrays: {sorted(missing)}")
-    if int(ensemble["schema_version"]) != 1:
+    if int(ensemble["schema_version"]) != 2:
         raise ValueError("unexpected final-test ensemble schema")
     if str(ensemble["test_suite_id"].item()) != "physics_motor_final_test":
         raise ValueError("unexpected final-test suite identifier")
@@ -228,9 +242,22 @@ def validate_physics_test_ensemble(
         raise ValueError("final-test parameter order is invalid")
     parameters = np.asarray(ensemble["parameters"], dtype=np.float64)
     if parameters.shape != (24, len(MODEL_PARAMETER_NAMES)):
-        raise ValueError("final-test parameter matrix must have shape (24, 11)")
-    if not np.isfinite(parameters).all() or np.any(parameters <= 0.0):
-        raise ValueError("final-test parameters must be finite and positive")
+        raise ValueError(
+            "final-test parameter matrix must have shape "
+            f"(24, {len(MODEL_PARAMETER_NAMES)})"
+        )
+    if not np.isfinite(parameters).all():
+        raise ValueError("final-test parameters must be finite")
+    friction_start = MODEL_PARAMETER_NAMES.index("coulomb_friction_nm")
+    if np.any(parameters[:, :friction_start] <= 0.0):
+        raise ValueError("non-friction-level final-test parameters must be positive")
+    coulomb = parameters[:, MODEL_PARAMETER_NAMES.index("coulomb_friction_nm")]
+    static = parameters[:, MODEL_PARAMETER_NAMES.index("static_friction_nm")]
+    if np.any(coulomb < 0.0) or np.any(static < coulomb):
+        raise ValueError("final-test LuGre levels must satisfy Fs >= Fc >= 0")
+    nominal_coulomb = nominal[MODEL_PARAMETER_NAMES.index("coulomb_friction_nm")]
+    if nominal_coulomb > 0.0 and np.any(coulomb <= 0.0):
+        raise ValueError("active final-test LuGre Coulomb friction must be positive")
     if np.count_nonzero(ensemble["test_group"] == "in_distribution") != 16:
         raise ValueError("final-test suite must contain 16 in-distribution models")
     if np.count_nonzero(ensemble["test_group"] == "ood") != 8:
@@ -308,7 +335,7 @@ def build_physics_test_ensemble(
     train_mask = source["role"] == "train"
     validation_mask = source["role"] == "validation"
     manifest: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "test_suite_id": "physics_motor_final_test",
         "status": "sealed_unconsumed",
         "candidate_evaluated_during_construction": False,

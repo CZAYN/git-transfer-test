@@ -1,8 +1,10 @@
 from pathlib import Path
+import shutil
 
 import numpy as np
 
 from elc_rl.tuning_env import (
+    OBSERVATION_KEYS,
     PIDTuningEnv,
     STAGE_INDICES,
     STAGE_ORDER,
@@ -12,6 +14,12 @@ from elc_rl.tuning_env import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PURE_PHYSICS_RUNTIME_FILES = (
+    "config/motor_physics.json",
+    "data/processed/controller_parameter_space.json",
+    "data/processed/physics_motor_ensemble.npz",
+    "data/processed/physics_motor_ensemble_manifest.json",
+)
 
 
 def test_reset_is_seed_deterministic_and_observation_is_valid():
@@ -23,6 +31,20 @@ def test_reset_is_seed_deterministic_and_observation_is_valid():
     first_observation, first_info = environment.reset(seed=1234)
     second_observation, second_info = environment.reset(seed=1234)
     assert environment.observation_space.contains(first_observation)
+    assert set(first_observation) == set(OBSERVATION_KEYS)
+    assert set(environment.observation_space.spaces) == set(OBSERVATION_KEYS)
+    assert "frf_context" not in first_observation
+    assert first_observation["sampled_frf"].shape == (96,)
+    friction_context = first_observation["friction_context"]
+    assert friction_context.shape == (6,)
+    assert np.isfinite(friction_context).all()
+    assert np.max(np.abs(friction_context)) <= 1.0 + 1e-6
+    assert np.any(np.abs(friction_context) > 0.0)
+    flattened_size = sum(
+        int(np.prod(space.shape))
+        for space in environment.observation_space.spaces.values()
+    )
+    assert flattened_size == 179
     for key in first_observation:
         assert np.array_equal(first_observation[key], second_observation[key])
     assert first_info["sampled_model_ids"] == second_info["sampled_model_ids"]
@@ -32,6 +54,25 @@ def test_reset_is_seed_deterministic_and_observation_is_valid():
     )
     assert first_info["fast_time_safe"]
     assert first_info["audit_time_safe"]
+
+
+def test_environment_runs_without_measured_frf_artifacts(tmp_path):
+    for relative in PURE_PHYSICS_RUNTIME_FILES:
+        source = PROJECT_ROOT / relative
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+    assert not (tmp_path / "data/processed/frf_tasks.npz").exists()
+    environment = PIDTuningEnv(
+        tmp_path,
+        stage="joint",
+        initial_perturbation=0.0,
+    )
+    observation, info = environment.reset(seed=20260730, options={"perturb": False})
+    assert environment.observation_space.contains(observation)
+    assert set(observation) == set(OBSERVATION_KEYS)
+    assert info["backend"] == "physics"
 
 
 def test_dobc_time_cost_prefers_the_configured_nominal_gain():
@@ -144,6 +185,7 @@ def test_exported_environment_state_restores_exact_next_transition():
     first.reset(seed=314159)
     first.step(np.full(11, 0.05, dtype=np.float32))
     state = first.export_state()
+    assert state["schema_version"] == 3
     expected = first.step(np.full(11, -0.03, dtype=np.float32))
 
     restored = PIDTuningEnv(
@@ -165,6 +207,18 @@ def test_exported_environment_state_restores_exact_next_transition():
     assert expected[4]["total_step"] == actual[4]["total_step"]
     assert expected[4]["stage_cost"] == actual[4]["stage_cost"]
     assert np.array_equal(expected[4]["parameters"], actual[4]["parameters"])
+
+
+def test_legacy_environment_state_is_rejected():
+    environment = PIDTuningEnv(PROJECT_ROOT, initial_perturbation=0.0)
+    environment.reset(seed=9, options={"perturb": False})
+    state = environment.export_state()
+    state["schema_version"] = 2
+    with np.testing.assert_raises_regex(
+        ValueError,
+        "unsupported environment state schema",
+    ):
+        environment.restore_state(state)
 
 
 def test_every_stage_can_reset_and_step():

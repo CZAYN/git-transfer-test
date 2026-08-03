@@ -23,14 +23,15 @@ outputs/
 runs/
 logs/
 dist/
+tmp/
 *.zip
 
 # Local notes and archived conversations
 WSL旧会话记录/
 电机三环控制与强化学习调参_完整会话.md
 
-# Keep only the five training/validation runtime inputs used by the server.
-# Raw measurements and sealed final-test inputs stay outside the Git checkout.
+# Keep the physics training inputs plus measured FRF assets used only for
+# offline model-mismatch diagnostics. Sealed final-test inputs stay untracked.
 data/*
 !data/processed/
 data/processed/*

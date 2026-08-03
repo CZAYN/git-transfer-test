@@ -49,6 +49,8 @@ def test_training_input_manifest_is_deterministic_and_training_only():
     assert "scripts/train_sac.py" in names
     assert not any("physics_motor_test" in name for name in names)
     assert not any("final_test" in name for name in names)
+    assert not any("frf_tasks" in name for name in names)
+    assert "src/elc_rl/task_dataset.py" not in names
 
 
 def test_candidate_pool_deduplicates_and_keeps_the_lowest_costs():
@@ -311,6 +313,26 @@ def test_engineering_candidate_is_rejected_by_formal_selection(tmp_path):
         input_fingerprint=np.asarray("a" * 64),
     )
     with pytest.raises(ValueError, match="not eligible"):
+        select_multi_seed_candidate(
+            PROJECT_ROOT,
+            [candidate],
+            tmp_path / "selection",
+        )
+
+
+def test_candidate_from_old_training_protocol_is_rejected(tmp_path):
+    space = load_physics_controller_parameter_space(PROJECT_ROOT)
+    candidate = tmp_path / "old_protocol_candidate.npz"
+    np.savez_compressed(
+        candidate,
+        parameter_names=np.asarray(space.names),
+        parameters=space.initial,
+        seed=np.asarray(1, dtype=np.int64),
+        training_complete=np.asarray(True),
+        eligible_for_selection=np.asarray(True),
+        input_fingerprint=np.asarray("a" * 64),
+    )
+    with pytest.raises(ValueError, match="does not match current protocol"):
         select_multi_seed_candidate(
             PROJECT_ROOT,
             [candidate],

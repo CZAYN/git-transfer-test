@@ -14,10 +14,10 @@ from typing import Any, Iterable
 
 import numpy as np
 
-from .tuning_env import PIDTuningEnv, STAGE_ORDER
+from .tuning_env import OBSERVATION_KEYS, PIDTuningEnv, STAGE_ORDER
 
 
-TRANSITION_SCHEMA_VERSION = 1
+TRANSITION_SCHEMA_VERSION = 3
 DEFAULT_TRANSITIONS_PER_STAGE = 128
 DEFAULT_SEED = 20260722
 
@@ -72,6 +72,13 @@ def validate_transition_archive(path: Path) -> dict[str, Any]:
         if np.any((stage_index < 0) | (stage_index >= len(STAGE_ORDER))):
             raise ValueError("invalid stage index")
         observation_keys = tuple(str(value) for value in data["observation_keys"])
+        if (
+            len(observation_keys) != len(OBSERVATION_KEYS)
+            or set(observation_keys) != set(OBSERVATION_KEYS)
+        ):
+            raise ValueError(
+                "transition observation keys do not match the pure-physics schema"
+            )
         for key in observation_keys:
             observation_name = f"observation__{key}"
             next_name = f"next_observation__{key}"

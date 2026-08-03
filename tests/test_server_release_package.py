@@ -39,6 +39,8 @@ def test_final_test_package_is_reproducible_and_excludes_training_runtime(tmp_pa
     assert "scripts/train_sac.py" not in names
     assert "scripts/select_final_candidate.py" not in names
     assert "src/elc_rl/sac_training.py" not in names
+    assert not any("frf_tasks" in name for name in names)
+    assert "src/elc_rl/task_dataset.py" not in names
 
 
 def test_single_upload_release_contains_separate_inner_archives(tmp_path):
@@ -75,6 +77,10 @@ def test_single_upload_release_contains_separate_inner_archives(tmp_path):
     assert "src/elc_rl/parallel_env.py" in training_names
     assert "src/elc_rl/simulation_kernel.py" in training_names
     assert not any("physics_motor_test" in name for name in training_names)
+    assert not any("frf_tasks" in name for name in training_names)
+    assert "src/elc_rl/task_dataset.py" not in training_names
     assert "data/processed/physics_motor_test.npz" in final_test_names
     assert "src/elc_rl/simulation_kernel.py" in final_test_names
     assert "scripts/train_sac.py" not in final_test_names
+    assert not any("frf_tasks" in name for name in final_test_names)
+    assert "src/elc_rl/task_dataset.py" not in final_test_names
